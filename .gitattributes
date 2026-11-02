@@ -1,0 +1,2 @@
+# 셸 스크립트가 CRLF로 체크아웃되면 /bin/sh 가 깨진다 (core.autocrlf=true 환경)
+* text=auto eol=lf

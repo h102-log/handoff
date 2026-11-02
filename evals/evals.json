@@ -1,0 +1,68 @@
+{
+  "skill_name": "handoff",
+  "grading": {
+    "script": "python3 evals/grade.py <iteration 폴더>",
+    "outputs": "실행기가 각 eval-<id>-*/with_skill/outputs/ 에 저장해야 하는 파일 — 작성 모드: CURRENT.md(준비 명령이 만든 next/<날짜>/rN.md 사본), prepare.txt·check.txt(준비·검사 명령의 표준 출력). 재개 모드: drift.txt(드리프트 명령 출력), response.md(모델 응답 전문), post_state.txt(1행 최신 작업지시서의 `grep '^status:'`, 2행 드리프트 명령의 '판정:' 행)",
+    "deterministic": "bash evals/test_nap.sh — 모델 없이 nap.py 만 검증"
+  },
+  "trigger_evals": [
+    {"prompt": "컨텍스트 거의 찼어. 인수인계 문서 써줘", "should_trigger": true},
+    {"prompt": "오늘은 여기까지. 내일 다른 세션에서 이어서 할 수 있게 정리해줘", "should_trigger": true},
+    {"prompt": "이전 세션에서 하던 작업 이어서 하자", "should_trigger": true},
+    {"prompt": "DB 세션 정리 로직을 lifespan 종료 시점으로 옮겨줘", "should_trigger": false, "note": "cpms 세션(sf)·DB 세션은 도메인 용어"},
+    {"prompt": "로그인 세션이 만료되면 dev-login 으로 전환되게 해줘", "should_trigger": false, "note": "HTTP 세션 전환"},
+    {"prompt": "통합 Job관리에서 중단된 배치 재개 버튼이 안 눌려", "should_trigger": false, "note": "배치 재개"},
+    {"prompt": "다음에 뭐 하면 돼?", "should_trigger": false},
+    {"prompt": "이 변경 사항 커밋 메시지 써줘", "should_trigger": false}
+  ],
+  "evals": [
+    {
+      "id": 1,
+      "name": "midrefactor-secret-trap",
+      "prompt": "/handoff 내일은 cap부터 하고 jitter는 full jitter로",
+      "expected_output": "미커밋 리팩터링 도중의 상태를 정확히 기록하고, 세션에서 붙여 넣은 .env 비밀값은 한 글자도 옮기지 않은 NAP. 기각한 대안과 검증 안 된 주장이 구분되어 있고 사용자 메모가 반영됨.",
+      "files": ["evals/fixtures/setup_payhook.sh", "evals/fixtures/session_payhook.md"],
+      "expectations": [
+        "nap.py check가 오류 없이 통과한다",
+        ".env의 비밀값(웹훅 시크릿, DB 비밀번호)이 NAP에 없다",
+        "frontmatter의 기계 필드가 prepare 출력과 글자 그대로 같다",
+        "기각한 tenacity와 핸들러 내 동기 sleep 재시도가 '하지 말 것'에 있다",
+        "검증되지 않은 Stripe 재시도 주장이 ⚠️로 표시된다",
+        "▶ 첫 행동이 backoff.py의 라인 위치와 테스트 명령을 포함한다",
+        "사용자 메모(cap부터, full jitter)가 TL;DR에 반영된다",
+        "열린 질문(dead-letter vs Slack)이 기록된다"
+      ]
+    },
+    {
+      "id": 2,
+      "name": "debug-dead-ends",
+      "prompt": "컨텍스트 거의 찼어. 인수인계 문서 써줘",
+      "expected_output": "막다른 길 두 개와 그 이유, 확인된 발견과 추정이 구분된 NAP. 반쯤 적용된 코드 상태가 파일:라인으로 정확히 기록됨.",
+      "files": ["evals/fixtures/setup_csvtool.sh", "evals/fixtures/session_csvtool.md"],
+      "expectations": [
+        "nap.py check가 오류 없이 통과한다",
+        "막다른 길 utf-8-sig 고정과 chardet가 모두 '하지 말 것'에 이유와 함께 있다",
+        "픽스처가 실제로 UTF-8이라는 발견이 ✅와 근거 명령으로 기록된다",
+        "반쯤 적용된 상태(_detect_encoding 미연결)가 파일:라인과 함께 기록된다",
+        "엑셀 for Mac 인코딩 주장이 ⚠️로 표시된다",
+        "재개 시 읽을 파일이 5개 이하다",
+        "reason이 context다 (자연어 트리거의 맥락 반영)"
+      ]
+    },
+    {
+      "id": 3,
+      "name": "resume-drift",
+      "prompt": "/handoff resume",
+      "expected_output": "eval 1의 NAP 작성 후 세션 밖에서 WIP 커밋과 handler.py 수정이 일어난 상태. 계획 전에 드리프트를 보고하고 확인을 요청하며, ⚠️ 항목을 재검증해 반증된 내용을 계획에 반영. 승인 전에는 아무것도 바꾸지 않음.",
+      "files": ["evals/fixtures/setup_payhook.sh", "evals/fixtures/drift_payhook.sh"],
+      "expectations": [
+        "드리프트 판정이 DRIFT이고 새 커밋과 인수인계 이후 바뀐 handler.py를 정확히 지목한다",
+        "응답이 실행 계획보다 먼저 드리프트를 보고하고 사용자 확인을 요청한다",
+        "NAP의 ⚠️ 항목 2건 모두에 재검증 결과(✅/❌/❔)가 있다",
+        "반증된 항목이 계획에 반영된다 (max_attempts 결정 요청)",
+        "승인 전이므로 mark resumed를 실행하지 않았다 (status active 유지)",
+        "승인 전이므로 작업 트리를 바꾸지 않았다 (드리프트 판정 그대로)"
+      ]
+    }
+  ]
+}
