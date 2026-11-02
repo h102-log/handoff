@@ -17,6 +17,8 @@ for PY in python3 python "py -3"; do $PY -c "" >/dev/null 2>&1 && break; done
 python3() { $PY "$@"; }
 # 이 PC 파이썬은 파이프 출력·read_text() 기본 인코딩이 cp949 라 이모지 출력과 UTF-8 채점 파일 읽기가 깨진다
 export PYTHONUTF8=1
+# 시나리오와 grade.py·grade_ab.py 가 한국어 nap.py 메시지(결과: 통과·판정:)를 읽으므로 로캘과 무관하게 한국어로 고정한다
+export HANDOFF_LANG=ko
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 SKILL_DIR="$(cd "$HERE/.." && pwd)"

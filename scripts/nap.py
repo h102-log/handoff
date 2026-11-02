@@ -23,6 +23,7 @@ import argparse
 import datetime as dt
 import hashlib
 import json
+import locale
 import os
 import re
 import subprocess
@@ -37,7 +38,28 @@ MANIFEST_IGNORE = f"/{NEXT}/**/.*.files"  # 해시 기록 파일만 로컬 무�
 LIVE = ("active", "resumed")  # 재개 대상
 DRAFT = "draft"  # prepare 가 만든 초안 — check 통과 시 active 로 승격
 MANIFEST_VERSION = 2  # 해시 방식이 바뀌면 올린다. v2: 텍스트 파일 줄바꿈을 LF 로 정규화한 뒤 해시
-TEMPLATE = Path(__file__).resolve().parent.parent / "assets" / "nap-template.md"
+TEMPLATES = {lang: Path(__file__).resolve().parent.parent / "assets" / f"nap-template.{lang}.md"
+             for lang in ("ko", "en")}
+UI_LANG = "ko"  # main() 에서 --lang → HANDOFF_LANG → 로캘 순으로 정한다
+DESCRIPTION_EN = """handoff skill helper script. Standard library only (python3 + git).
+
+A handoff doc (NAP) is next/yyyy-mm-dd/rN.md. The highest number in the most recent date folder (archive excluded)
+is "what to do now". Hand-written rN.md files without frontmatter join the same numbering (drift cannot be checked).
+
+Subcommands
+  snapshot  Summary of the current git and next/ state. Injected at skill load, so it always exits 0.
+  prepare   Create the next rN.md draft (status draft) in today's date folder and print the machine fields.
+            Existing files are left untouched. Stops without --force if the active NAP on the same branch has
+            no changes (guards against misfiring in a new session).
+  check     Validate a NAP: structure, recorded state match, paths, secrets, context-dependent phrases (exit 1 on errors).
+            On pass, promotes draft → active and marks the previous same-branch NAP superseded.
+  drift     Compare the NAP's recorded state with now (exit 1 on drift). Commits that only touch next/ are not drift.
+  mark      Change NAP status: resumed | done
+
+Status flow: draft (prepare) → active (check passed) → resumed (mark) → done (mark) | superseded (next NAP's check)
+The previous NAP's status changes only when the new NAP passes check, so the disk tells the truth wherever a session stops.
+When a date folder has no live (active, resumed) NAP left, the whole folder moves to next/archive/ (at check or mark done).
+"""
 ENUMS = {
     "kind": {"implementation", "research"},
     "status": {DRAFT, "active", "resumed", "done", "superseded"},
@@ -45,10 +67,17 @@ ENUMS = {
     "dirty": {"true", "false", "n/a"},
 }
 REQUIRED_FM = ("title", "kind", "status", "created", "reason", "branch", "head", "dirty", "worktree")
-REQUIRED_SECTIONS = ("TL;DR", "완료 기준", "상태 스냅샷", "다음 행동", "읽을 파일")
-SESSION_SECTIONS = ("결정", "발견", "하지 말 것")
+# 섹션 제목 대조 키 (한국어, 영어) — check 는 --lang 과 무관하게 두 언어 NAP 를 모두 받는다
+REQUIRED_SECTIONS = (("TL;DR",), ("완료 기준", "Done criteria"), ("상태 스냅샷", "State snapshot"),
+                     ("다음 행동", "Next actions"), ("읽을 파일", "Files to read"))
+SESSION_SECTIONS = (("결정", "Decisions"), ("발견", "Findings"), ("하지 말 것", "Do not"))
 VAGUE = ("아까", "방금", "앞서 말한", "앞서 논의", "위에서 말한", "위에서 논의", "이전 대화",
-         "말씀하신", "얘기한", "그 버그", "그 파일", "그 함수", "그 방식", "그 문제")
+         "말씀하신", "얘기한", "그 버그", "그 파일", "그 함수", "그 방식", "그 문제",
+         # 영어 표현은 소문자로 둔다 — 줄을 소문자로 바꿔 대조한다
+         "a moment ago", "just now", "as mentioned", "as discussed", "mentioned above", "discussed above",
+         "mentioned earlier", "discussed earlier", "earlier in this session", "earlier in the conversation",
+         "previous conversation", "you mentioned", "we discussed", "we talked about",
+         "that bug", "that file", "that function", "that approach", "that issue")
 CODE_EXT = {
     "py", "pyi", "ts", "tsx", "js", "jsx", "mjs", "cjs", "json", "jsonc", "md", "mdx", "yml",
     "yaml", "toml", "ini", "cfg", "conf", "sh", "bash", "zsh", "ps1", "go", "rs", "rb", "java",
@@ -56,18 +85,18 @@ CODE_EXT = {
     "scss", "vue", "svelte", "txt", "csv", "tsv", "xml", "gradle", "proto", "graphql", "lock",
     "env", "dockerfile", "tf", "lua", "dart", "ex", "exs", "scala", "r", "ipynb",
 }
-SECRET_PATTERNS = [
-    ("개인 키", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")),
-    ("AWS 액세스 키", re.compile(r"\bAKIA[0-9A-Z]{16}\b")),
-    ("GitHub 토큰", re.compile(r"\bgh[pousr]_[A-Za-z0-9]{30,}")),
-    ("Slack 토큰", re.compile(r"\bxox[abprs]-[A-Za-z0-9-]{10,}")),
-    ("API 키(sk-)", re.compile(r"\bsk-[A-Za-z0-9_-]{20,}")),
-    ("Stripe 키", re.compile(r"\b[srp]k_(?:live|test)_[A-Za-z0-9]{10,}")),
-    ("웹훅 시크릿", re.compile(r"\bwhsec_[A-Za-z0-9_]{10,}")),
-    ("Google API 키", re.compile(r"\bAIza[0-9A-Za-z_-]{35}")),
-    ("JWT", re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}")),
-    ("자격증명이 든 URL", re.compile(r"[a-z][a-z0-9+.-]*://[^\s/:@`]+:[^\s/@`]+@")),
-    ("비밀값 대입", re.compile(
+SECRET_PATTERNS = [  # (한국어 이름, 영어 이름, 패턴)
+    ("개인 키", "private key", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")),
+    ("AWS 액세스 키", "AWS access key", re.compile(r"\bAKIA[0-9A-Z]{16}\b")),
+    ("GitHub 토큰", "GitHub token", re.compile(r"\bgh[pousr]_[A-Za-z0-9]{30,}")),
+    ("Slack 토큰", "Slack token", re.compile(r"\bxox[abprs]-[A-Za-z0-9-]{10,}")),
+    ("API 키(sk-)", "API key (sk-)", re.compile(r"\bsk-[A-Za-z0-9_-]{20,}")),
+    ("Stripe 키", "Stripe key", re.compile(r"\b[srp]k_(?:live|test)_[A-Za-z0-9]{10,}")),
+    ("웹훅 시크릿", "webhook secret", re.compile(r"\bwhsec_[A-Za-z0-9_]{10,}")),
+    ("Google API 키", "Google API key", re.compile(r"\bAIza[0-9A-Za-z_-]{35}")),
+    ("JWT", "JWT", re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}")),
+    ("자격증명이 든 URL", "URL with credentials", re.compile(r"[a-z][a-z0-9+.-]*://[^\s/:@`]+:[^\s/@`]+@")),
+    ("비밀값 대입", "secret assignment", re.compile(
         r"\b[A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASSWD|API_?KEY|PRIVATE_?KEY|ACCESS_?KEY)"
         r"[A-Z0-9_]*\s*[:=]\s*['\"]?[A-Za-z0-9_\-+/=.!#$%^&*~]{8,}")),
 ]
@@ -75,6 +104,25 @@ SECRET_KEY_NAME = re.compile(r"SECRET|TOKEN|PASS|PWD|KEY|CREDENTIAL|AUTH|PRIVATE
 
 
 # ---------------------------------------------------------------- 공통 도우미
+
+def tr(ko, en):
+    """선택된 언어(UI_LANG)의 메시지."""
+    return ko if UI_LANG == "ko" else en
+
+
+def env_lang():
+    """HANDOFF_LANG → LC_ALL·LC_MESSAGES·LANG 중 처음 비어 있지 않은 것 → OS 로캘 순으로 ko 또는 en."""
+    v = os.environ.get("HANDOFF_LANG", "").lower()
+    if v.startswith(("ko", "en")):
+        return v[:2]
+    loc = next((os.environ[k] for k in ("LC_ALL", "LC_MESSAGES", "LANG") if os.environ.get(k)), None)
+    if loc is None:
+        try:
+            loc = locale.getlocale()[0]  # 한국어 Windows 는 'Korean_Korea'
+        except ValueError:
+            loc = None
+    return "ko" if (loc or "").lower().startswith(("ko", "korean")) else "en"
+
 
 def git(root, *args, binary=False):
     """성공하면 출력(str 또는 bytes), 실패하면 None."""
@@ -281,7 +329,8 @@ def state(root, is_git):
                     worktree="n/a", status=[], base="", hashes=None, changed=None)
     v2 = status_v2(root)
     if v2 is None:
-        raise RuntimeError("git status 실패 — 저장소 상태를 읽을 수 없음")
+        raise RuntimeError(tr("git status 실패 — 저장소 상태를 읽을 수 없음",
+                              "git status failed — cannot read the repository state"))
     head_full, st = v2["oid"], v2["entries"]
     base = head_full or empty_tree(root)
     changed = diff_numstat(root, base)
@@ -387,61 +436,72 @@ def changed_since(recorded, now):
         if recorded.get(p) == now.get(p):
             continue
         if p in recorded and p in now:
-            out.append(f"  수정됨      {p}")
+            out.append(tr(f"  수정됨      {p}", f"  modified       {p}"))
         elif p in now:
-            out.append(f"  새로 변경   {p}")
+            out.append(tr(f"  새로 변경   {p}", f"  newly changed  {p}"))
         else:
-            out.append(f"  원래대로    {p}  (기록 시점엔 변경돼 있었음)")
+            out.append(tr(f"  원래대로    {p}  (기록 시점엔 변경돼 있었음)",
+                          f"  reverted       {p}  (was changed at record time)"))
     return out
 
 
 def drift(root, fm, s, nap=None):
     """(판정 문자열, [(제목, 내용)])"""
     if not s["is_git"]:
-        return "N/A (git 저장소 아님)", []
+        return tr("N/A (git 저장소 아님)", "N/A (not a git repository)"), []
     issues, details, notes = [], [], []
     rb, rh, rw = fm.get("branch", ""), fm.get("head", ""), fm.get("worktree", "")
     mbase, recorded, mver = read_manifest(nap) if nap else (None, None, None)
     if rb and rb != s["branch"]:
-        issues.append(f"브랜치 {rb} → {s['branch']}")
+        issues.append(tr(f"브랜치 {rb} → {s['branch']}", f"branch {rb} → {s['branch']}"))
     base = None
     if rh == "none":
         base = empty_tree(root)
         if s["head_full"]:
-            issues.append("기록 시점엔 커밋이 없었는데 지금은 있음")
+            issues.append(tr("기록 시점엔 커밋이 없었는데 지금은 있음", "there were no commits at record time, but there are now"))
     elif rh and rh != "n/a":
         full = recorded_head(root, rh, mbase, s)
         if not full:
-            issues.append(f"기록된 HEAD {rh}를 찾을 수 없음 (히스토리 재작성 가능성)")
+            issues.append(tr(f"기록된 HEAD {rh}를 찾을 수 없음 (히스토리 재작성 가능성)",
+                             f"recorded HEAD {rh} not found (history may have been rewritten)"))
         else:
             base = full
             if full != s["head_full"]:
                 if git(root, "merge-base", "--is-ancestor", full, "HEAD") is not None:
                     n = git(root, "rev-list", "--count", f"{full}..HEAD") or "?"
                     if git(root, "diff", "--name-only", full, "HEAD", "--", ".", f":(exclude){NEXT}") == "":
-                        notes.append(f"기록 이후 커밋 {n}개는 {NEXT}/ 만 바꿈 (작업지시서 커밋)")
+                        notes.append(tr(f"기록 이후 커밋 {n}개는 {NEXT}/ 만 바꿈 (작업지시서 커밋)",
+                                        f"the {n} commit(s) since recording only touched {NEXT}/ (handoff doc commits)"))
                     else:
-                        issues.append(f"새 커밋 {n}개")
-                        details.append(("기록 이후 커밋", git(root, "log", "--oneline", "-10", f"{full}..HEAD") or ""))
+                        issues.append(tr(f"새 커밋 {n}개", f"{n} new commit(s)"))
+                        details.append((tr("기록 이후 커밋", "Commits since recording"),
+                                        git(root, "log", "--oneline", "-10", f"{full}..HEAD") or ""))
                 else:
-                    issues.append("HEAD가 기록 시점의 후손이 아님 (reset·rebase·브랜치 이동 가능성)")
+                    issues.append(tr("HEAD가 기록 시점의 후손이 아님 (reset·rebase·브랜치 이동 가능성)",
+                                     "HEAD is not a descendant of the recorded HEAD (reset, rebase or branch move?)"))
     if recorded is not None and mver != MANIFEST_VERSION:
-        issues.append(f"매니페스트 형식 v{mver} (현재 v{MANIFEST_VERSION}, 해시 방식 변경) — "
-                      "준비 명령에 --refresh 를 붙여 갱신한 뒤 다시 확인")
+        issues.append(tr(f"매니페스트 형식 v{mver} (현재 v{MANIFEST_VERSION}, 해시 방식 변경) — "
+                         "준비 명령에 --refresh 를 붙여 갱신한 뒤 다시 확인",
+                         f"manifest format v{mver} (current v{MANIFEST_VERSION}, hashing changed) — "
+                         "run the prepare command with --refresh, then check again"))
     elif base and rw not in ("", "n/a", "unknown"):
         changed_now = s["changed"] if base == s["base"] else diff_numstat(root, base)
         now = s["hashes"] if base == s["base"] else file_hashes(root, changed_now, s["status"])
         if digest_of(now) != rw:
-            issues.append("작업 내용 변경 (기록 시점과 파일 내용이 다름)")
+            issues.append(tr("작업 내용 변경 (기록 시점과 파일 내용이 다름)",
+                             "work content changed (file contents differ from record time)"))
             per_file = changed_since(recorded, now) if recorded is not None and mbase == base and now is not None else None
             if per_file:
-                details.append(("인수인계 이후 달라진 파일", "\n".join(per_file)))
+                details.append((tr("인수인계 이후 달라진 파일", "Files changed since the handoff"), "\n".join(per_file)))
             else:
                 names = sorted(set(changed_now or {}) | {p for xy, p in s["status"] if xy == "??"})
-                listing = "\n".join(f"  {p}" for p in names[:30]) + (f"\n  … 외 {len(names) - 30}개" if len(names) > 30 else "")
-                details.append(("기록 시점 HEAD 대비 변경 파일 (매니페스트 없음)", listing))
+                listing = "\n".join(f"  {p}" for p in names[:30]) + (
+                    tr(f"\n  … 외 {len(names) - 30}개", f"\n  … {len(names) - 30} more") if len(names) > 30 else "")
+                details.append((tr("기록 시점 HEAD 대비 변경 파일 (매니페스트 없음)",
+                                   "Files changed vs. the recorded HEAD (no manifest)"), listing))
         elif issues:
-            notes.append("작업 내용은 기록 시점과 동일 — 미커밋 변경이 그대로 커밋된 것으로 보임")
+            notes.append(tr("작업 내용은 기록 시점과 동일 — 미커밋 변경이 그대로 커밋된 것으로 보임",
+                            "work content is the same as recorded — uncommitted changes appear to have been committed as is"))
     if not issues:
         return "CLEAN" + (" — " + "; ".join(notes) if notes else ""), details
     return "DRIFT — " + "; ".join(issues + notes), details
@@ -453,29 +513,39 @@ def next_lines(root, is_git, s):
     out = ["### next/"]
     nd = root / NEXT
     if is_git:
-        out.append("- 해시 기록 파일 로컬 무시: " + ("됨" if is_ignored(root) else "안 됨 (준비 명령이 .git/info/exclude에 등록)"))
+        out.append(tr("- 해시 기록 파일 로컬 무시: ", "- Manifest files ignored locally: ")
+                   + (tr("됨", "yes") if is_ignored(root)
+                      else tr("안 됨 (준비 명령이 .git/info/exclude에 등록)", "no (the prepare command adds them to .git/info/exclude)")))
     if not nd.is_dir():
-        out.append("- 아직 없음 (첫 사용)")
+        out.append(tr("- 아직 없음 (첫 사용)", "- Not created yet (first use)"))
         return out
     foreign = sorted(p.name for p in nd.iterdir()
                      if p.name != ARC and not p.name.startswith(".") and not (p.is_dir() and DATE_DIR.match(p.name)))
     if foreign:
-        out.append(f"- ⚠ 날짜 폴더 외 항목 있음: {', '.join(foreign[:5])} — 폴더 이름 충돌 가능")
+        out.append(tr(f"- ⚠ 날짜 폴더 외 항목 있음: {', '.join(foreign[:5])} — 폴더 이름 충돌 가능",
+                      f"- ⚠ Entries other than date folders: {', '.join(foreign[:5])} — folder names may collide"))
     naps = nap_list(nd)
     if naps:
         cur = naps[-1]
         fm, body = read_nap(cur)[:2]
         if not fm:
             head = next((l[2:].strip() for l in body.split("\n") if l.startswith("# ")), "?")
-            out.append(f"- 최신 작업지시서: {rel(cur, root)} · \"{head}\" · frontmatter 없음 (직접 쓴 문서 — 드리프트 확인 불가)")
+            out.append(tr(f"- 최신 작업지시서: {rel(cur, root)} · \"{head}\" · frontmatter 없음 (직접 쓴 문서 — 드리프트 확인 불가)",
+                          f"- Latest handoff doc: {rel(cur, root)} · \"{head}\" · no frontmatter "
+                          "(hand-written doc — drift cannot be checked)"))
         else:
-            out.append(f"- 최신 작업지시서: {rel(cur, root)} · \"{fm.get('title', '?')}\" · status {fm.get('status', '?')} · "
+            out.append(tr("- 최신 작업지시서: ", "- Latest handoff doc: ")
+                       + f"{rel(cur, root)} · \"{fm.get('title', '?')}\" · status {fm.get('status', '?')} · "
                        f"kind {fm.get('kind', '?')} · branch {fm.get('branch', '?')} · created {fm.get('created', '?')}")
         if fm.get("status") == DRAFT:
-            out.append(f"- ⚠ 최신 작업지시서가 미완성 초안(draft) — 이전 세션의 인수인계가 도중에 끊김. "
-                       f"이전 NAP: {fm.get('previous') or '없음'} (그 경로로 재개하거나, 초안을 완성해 검사 명령으로 승격)")
+            out.append(tr(f"- ⚠ 최신 작업지시서가 미완성 초안(draft) — 이전 세션의 인수인계가 도중에 끊김. "
+                          f"이전 NAP: {fm.get('previous') or '없음'} (그 경로로 재개하거나, 초안을 완성해 검사 명령으로 승격)",
+                          "- ⚠ The latest handoff doc is an unfinished draft — "
+                          "the previous session's handoff was interrupted. "
+                          f"Previous NAP: {fm.get('previous') or 'none'} "
+                          "(resume from that path, or finish the draft and promote it with the check command)"))
         elif fm.get("status") in LIVE:
-            out.append(f"- 드리프트: {drift(root, fm, s, cur)[0]}")
+            out.append(tr("- 드리프트: ", "- Drift: ") + drift(root, fm, s, cur)[0])
         if is_git:
             live = []
             for p in naps[:-1]:
@@ -483,13 +553,15 @@ def next_lines(root, is_git, s):
                 if f.get("status") in LIVE and f.get("branch") == s["branch"]:
                     live.append(p)
             if live:
-                out.append(f"- 현재 브랜치({s['branch']})의 다른 활성 NAP: " + ", ".join(rel(p, root) for p in live[-3:]))
+                out.append(tr(f"- 현재 브랜치({s['branch']})의 다른 활성 NAP: ",
+                              f"- Other active NAPs on the current branch ({s['branch']}): ")
+                           + ", ".join(rel(p, root) for p in live[-3:]))
     else:
-        out.append("- 작업지시서: 없음")
+        out.append(tr("- 작업지시서: 없음", "- Handoff docs: none"))
     if (nd / ARC).is_dir():
         n = sum(1 for p in (nd / ARC).iterdir() if p.is_dir())
         if n:
-            out.append(f"- 보관: 날짜 폴더 {n}개 ({NEXT}/{ARC}/)")
+            out.append(tr(f"- 보관: 날짜 폴더 {n}개 ({NEXT}/{ARC}/)", f"- Archive: {n} date folder(s) ({NEXT}/{ARC}/)"))
     return out
 
 
@@ -499,32 +571,36 @@ def cmd_snapshot(a):
         s = state(root, is_git)
         out = ["### git"]
         if not is_git:
-            out.append(f"- git 저장소가 아님 ({root}) — 드리프트 확인 불가, 파일 상태를 직접 기록할 것")
+            out.append(tr(f"- git 저장소가 아님 ({root}) — 드리프트 확인 불가, 파일 상태를 직접 기록할 것",
+                          f"- Not a git repository ({root}) — drift cannot be checked; record the file state by hand"))
         else:
-            out.append(f"- 루트: {root}")
-            out.append(f"- 브랜치: {s['branch']} · HEAD: {s['head']}")
+            out.append(tr(f"- 루트: {root}", f"- Root: {root}"))
+            out.append(tr(f"- 브랜치: {s['branch']} · HEAD: {s['head']}", f"- Branch: {s['branch']} · HEAD: {s['head']}"))
             st = s["status"]
             if st:
                 counts = Counter(xy.strip() or "?" for xy, _ in st)
                 summary = " · ".join(f"{k} {v}" for k, v in counts.most_common())
                 ds = diffstat(s["changed"])
-                out.append(f"- 미커밋: {len(st)}개 ({summary})" + (f" · {ds}" if ds else ""))
+                out.append(tr(f"- 미커밋: {len(st)}개 ({summary})", f"- Uncommitted: {len(st)} ({summary})")
+                           + (f" · {ds}" if ds else ""))
                 # 20행까지만 나열하고 나머지는 최상위 폴더별 개수로 — 스킬 로드 시 주입되는 컨텍스트를 아끼기 위해
                 out += [f"  {xy} {p}" for xy, p in st[:20]]
                 if len(st) > 20:
                     dirs = Counter((p.split("/", 1)[0] + "/") if "/" in p else p for _, p in st[20:])
-                    out.append(f"  … 외 {len(st) - 20}개: " + " · ".join(f"{d} {n}" for d, n in dirs.most_common(6)))
+                    out.append(tr(f"  … 외 {len(st) - 20}개: ", f"  … {len(st) - 20} more: ")
+                               + " · ".join(f"{d} {n}" for d, n in dirs.most_common(6)))
             else:
-                out.append("- 미커밋: 없음")
+                out.append(tr("- 미커밋: 없음", "- Uncommitted: none"))
             log = git(root, "log", "--oneline", "-5") if s["head_full"] else None
             if log:
-                out.append("- 최근 커밋:")
+                out.append(tr("- 최근 커밋:", "- Recent commits:"))
                 out += [f"  {x}" for x in log.splitlines()]
             out.append(f"- worktree: {s['worktree']}")
         out += next_lines(root, is_git, s)
         print("\n".join(out))
     except Exception as e:  # 스냅샷 실패가 스킬 전체를 막지 않도록
-        print(f"(스냅샷 수집 실패: {type(e).__name__}: {e}) — git status로 직접 확인할 것")
+        print(tr(f"(스냅샷 수집 실패: {type(e).__name__}: {e}) — git status로 직접 확인할 것",
+                 f"(snapshot failed: {type(e).__name__}: {e}) — check with git status directly"))
     return 0
 
 
@@ -537,7 +613,7 @@ def cmd_prepare(a):
     msgs = [f"- next/: {nd}"]
     if is_git:
         if is_ignored(root):
-            msgs.append("- 해시 기록 파일 로컬 무시: 이미 됨")
+            msgs.append(tr("- 해시 기록 파일 로컬 무시: 이미 됨", "- Manifest files ignored locally: already"))
         else:
             excl = Path(git(root, "rev-parse", "--git-path", "info/exclude") or ".git/info/exclude")
             excl = excl if excl.is_absolute() else root / excl
@@ -546,14 +622,17 @@ def cmd_prepare(a):
             with excl.open("a", encoding="utf-8") as f:
                 f.write(("\n" if prev and not prev.endswith("\n") else "") + f"{MANIFEST_IGNORE}\n")
             ok = is_ignored(root)
-            msgs.append(f"- 해시 기록 파일 로컬 무시: {excl}에 {MANIFEST_IGNORE} 추가 (작업지시서 rN.md 는 커밋 대상)"
-                        + ("" if ok else " ⚠ 그래도 무시되지 않음 — .gitignore의 ! 패턴 확인"))
+            msgs.append(tr(f"- 해시 기록 파일 로컬 무시: {excl}에 {MANIFEST_IGNORE} 추가 (작업지시서 rN.md 는 커밋 대상)",
+                           f"- Manifest files ignored locally: added {MANIFEST_IGNORE} to {excl} "
+                           "(handoff docs rN.md are meant to be committed)")
+                        + ("" if ok else tr(" ⚠ 그래도 무시되지 않음 — .gitignore의 ! 패턴 확인",
+                                            " ⚠ still not ignored — check for ! patterns in .gitignore")))
     s = state(root, is_git)
     naps = nap_list(nd)
     cur = naps[-1] if naps else None
     if a.refresh:
         if cur is None:
-            print("갱신할 작업지시서가 없음 — --refresh 없이 실행할 것")
+            print(tr("갱신할 작업지시서가 없음 — --refresh 없이 실행할 것", "No handoff doc to refresh — run without --refresh"))
             return 1
         text = cur.read_text("utf-8", "replace")
         for k in ("branch", "head", "dirty", "worktree"):
@@ -561,17 +640,23 @@ def cmd_prepare(a):
         save(cur, text)
         if is_git:
             write_manifest(cur, s["base"], s["hashes"])
-        print(f"기계 필드 갱신: {rel(cur, root)} · branch {s['branch']} · head {s['head']} · dirty {s['dirty']} · worktree {s['worktree']}")
-        print("상태 스냅샷 섹션의 문장도 현재 상태에 맞게 고친 뒤 검사 명령을 다시 실행할 것")
+        print(tr("기계 필드 갱신: ", "Machine fields refreshed: ") + f"{rel(cur, root)} · branch {s['branch']} · "
+              f"head {s['head']} · dirty {s['dirty']} · worktree {s['worktree']}")
+        print(tr("상태 스냅샷 섹션의 문장도 현재 상태에 맞게 고친 뒤 검사 명령을 다시 실행할 것",
+                 "Update the State snapshot section text to match the current state too, then run the check command again"))
         return 0
     fm = read_nap(cur)[0] if cur else {}
     if is_git and cur and not a.force:
         # 같은 브랜치의 활성 NAP 에 아무 변화가 없으면 인수인계할 것이 없다 — 새 세션에서 resume 대신 잘못 부른 경우가 대부분
         if (fm.get("status") in LIVE and fm.get("branch") == s["branch"] and fm.get("worktree") == s["worktree"]
                 and recorded_head(root, fm.get("head", ""), read_manifest(cur)[0], s) == s["head_full"]):
-            print(f"인수인계할 변화 없음: 활성 NAP \"{fm.get('title', '?')}\" 의 기록 시점과 브랜치·HEAD·작업 내용이 같음")
-            print("새 세션이면 작성 모드가 아니라 `/handoff resume` 이 맞는지 확인할 것. "
-                  "파일 변화 없이 지식만 늘어난 세션(조사 등)이면 --force 로 진행")
+            print(tr(f"인수인계할 변화 없음: 활성 NAP \"{fm.get('title', '?')}\" 의 기록 시점과 브랜치·HEAD·작업 내용이 같음",
+                     f"Nothing to hand off: branch, HEAD and work content are the same as when the active NAP "
+                     f"\"{fm.get('title', '?')}\" was recorded"))
+            print(tr("새 세션이면 작성 모드가 아니라 `/handoff resume` 이 맞는지 확인할 것. "
+                     "파일 변화 없이 지식만 늘어난 세션(조사 등)이면 --force 로 진행",
+                     "If this is a new session, check whether `/handoff resume` is what you want instead of write mode. "
+                     "If the session only added knowledge without file changes (research, etc.), proceed with --force"))
             return 1
     day = nd / dt.date.today().isoformat()
     day.mkdir(exist_ok=True)
@@ -581,16 +666,21 @@ def cmd_prepare(a):
     previous = fm.get("previous", "") if fm.get("status") == DRAFT else (rel(cur, root) if cur else "")
     note = ""
     if fm.get("status") in LIVE and is_git and fm.get("branch") not in ("", s["branch"]):
-        note = (f"다른 브랜치({fm.get('branch')})의 활성 NAP {rel(cur, root)} 는 상태를 유지함 — "
-                f"그 브랜치에서 /handoff resume {rel(cur, root)} 로 이어갈 수 있음")
+        note = tr(f"다른 브랜치({fm.get('branch')})의 활성 NAP {rel(cur, root)} 는 상태를 유지함 — "
+                  f"그 브랜치에서 /handoff resume {rel(cur, root)} 로 이어갈 수 있음",
+                  f"the active NAP {rel(cur, root)} on another branch ({fm.get('branch')}) keeps its status — "
+                  f"continue it on that branch with /handoff resume {rel(cur, root)}")
     if is_git:
         write_manifest(new, s["base"], s["hashes"])
     session = (a.session or "").strip()
     if "${" in session:
         session = ""
+    tpl = TEMPLATES[UI_LANG]
+    # title 자리표시자도 템플릿 frontmatter 에서 읽는다 — 템플릿 파일과 어긋나지 않게
+    tfm, body = split_fm(tpl.read_text("utf-8"))[:2] if tpl.exists() else ({}, "\n")
     fm_lines = [
         "---",
-        "title: <작업 한 줄 요약>",
+        f"title: {tfm.get('title', '')}",
         "kind: implementation        # implementation | research",
         f"status: {DRAFT}",
         f"created: {now_iso()}",
@@ -604,18 +694,21 @@ def cmd_prepare(a):
         "---",
     ]
     # 초안을 바로 디스크에 둔다 — 작성이 끊겨도 "미완성 인수인계"와 previous 가 파일로 남는다
-    body = split_fm(TEMPLATE.read_text("utf-8"))[1] if TEMPLATE.exists() else "\n"
     save(new, "\n".join(fm_lines) + "\n" + body)
     if cur:
-        st_prev = fm.get("status") or "frontmatter 없음"
-        tail = " — 새 NAP 가 검사를 통과하면 superseded 로 바뀜" if st_prev in LIVE and not note else ""
-        msgs.append(f"- 직전 작업지시서: {rel(cur, root)} ({st_prev}{tail})")
+        st_prev = fm.get("status") or tr("frontmatter 없음", "no frontmatter")
+        tail = tr(" — 새 NAP 가 검사를 통과하면 superseded 로 바뀜",
+                  " — becomes superseded when the new NAP passes check") if st_prev in LIVE and not note else ""
+        msgs.append(tr("- 직전 작업지시서: ", "- Previous handoff doc: ") + f"{rel(cur, root)} ({st_prev}{tail})")
     if note:
-        msgs.append(f"- 주의: {note}")
-    msgs.append(f"- 초안 생성: {rel(new, root)} (status {DRAFT} — 검사 통과 시 active 로 자동 승격)")
-    print("## 준비 완료")
+        msgs.append(tr(f"- 주의: {note}", f"- Note: {note}"))
+    msgs.append(tr(f"- 초안 생성: {rel(new, root)} (status {DRAFT} — 검사 통과 시 active 로 자동 승격)",
+                   f"- Draft created: {rel(new, root)} (status {DRAFT} — promoted to active automatically when check passes)"))
+    print(tr("## 준비 완료", "## Ready"))
     print("\n".join(msgs))
-    print("\n## 새 NAP frontmatter (초안에 이미 들어 있음 — 기계 필드와 status 는 그대로, title·kind·reason만 채울 것)")
+    print(tr("\n## 새 NAP frontmatter (초안에 이미 들어 있음 — 기계 필드와 status 는 그대로, title·kind·reason만 채울 것)",
+             "\n## New NAP frontmatter (already in the draft — keep machine fields and status as is; "
+             "fill only title, kind, reason)"))
     print("\n".join(fm_lines))
     return 0
 
@@ -639,7 +732,7 @@ def local_secrets(root):
             return
         cred = re.search(r"://([^\s/:@]+):([^\s/@]+)@", v)
         if cred and len(cred.group(2)) >= 4:
-            vals[cred.group(2)] = (fname, f"{key}의 비밀번호")
+            vals[cred.group(2)] = (fname, tr(f"{key}의 비밀번호", f"password in {key}"))
             vals[v] = (fname, key)
             return
         entropy = by_shape and len(v) >= 16 and re.search(r"[A-Za-z]", v) and re.search(r"\d", v) and " " not in v
@@ -701,7 +794,7 @@ def cmd_check(a):
     root, is_git = resolve_root(a.root)
     path = nap_path(a.file, root)
     if path is None or not path.exists():
-        print(f"NAP 없음: {path or NEXT + '/ 에 작업지시서가 없음'}")
+        print(tr(f"NAP 없음: {path or NEXT + '/ 에 작업지시서가 없음'}", f"No NAP: {path or NEXT + '/ has no handoff doc'}"))
         return 1
     fm, body, text, m = read_nap(path)
     errors, warns = [], []
@@ -710,26 +803,32 @@ def cmd_check(a):
 
     # frontmatter
     if not m:
-        errors.append("[frontmatter] 없음 — 준비 명령 출력을 맨 위에 넣을 것")
+        errors.append(tr("[frontmatter] 없음 — 준비 명령 출력을 맨 위에 넣을 것",
+                         "[frontmatter] missing — put the prepare command output at the very top"))
     for k in REQUIRED_FM:
         if m and not fm.get(k):
-            errors.append(f"[frontmatter] {k} 비어 있음")
+            errors.append(tr(f"[frontmatter] {k} 비어 있음", f"[frontmatter] {k} is empty"))
     for k, allowed in ENUMS.items():
         if fm.get(k) and fm[k] not in allowed:
-            errors.append(f"[frontmatter] {k}: '{fm[k]}' — 허용값 {' | '.join(sorted(allowed))}")
+            errors.append(tr(f"[frontmatter] {k}: '{fm[k]}' — 허용값 ", f"[frontmatter] {k}: '{fm[k]}' — allowed values ")
+                          + " | ".join(sorted(allowed)))
     if fm.get("created"):
         try:
             dt.datetime.fromisoformat(fm["created"])
         except ValueError:
-            errors.append(f"[frontmatter] created '{fm['created']}' — ISO 8601 형식 아님")
+            errors.append(tr(f"[frontmatter] created '{fm['created']}' — ISO 8601 형식 아님",
+                             f"[frontmatter] created '{fm['created']}' — not ISO 8601"))
 
-    # 남은 템플릿 자리표시자
-    if TEMPLATE.exists():
-        holders = set(re.findall(r"<[^<>\n]+>", TEMPLATE.read_text("utf-8")))
-        for no, line in enumerate(lines, 1):
-            for h in holders:
-                if h in line:
-                    errors.append(f"[미작성] {no}행: 템플릿 자리표시자 {h} 가 남아 있음")
+    # 남은 템플릿 자리표시자 — 두 언어 템플릿의 합집합
+    holders = set()
+    for tpl in TEMPLATES.values():
+        if tpl.exists():
+            holders |= set(re.findall(r"<[^<>\n]+>", tpl.read_text("utf-8")))
+    for no, line in enumerate(lines, 1):
+        for h in holders:
+            if h in line:
+                errors.append(tr(f"[미작성] {no}행: 템플릿 자리표시자 {h} 가 남아 있음",
+                                 f"[unfilled] line {no}: template placeholder {h} is still there"))
 
     # 기록 상태 = 현재 상태 (작성 직후 검사이므로 초안과 살아 있는 NAP만)
     s = state(root, True) if is_git else None
@@ -737,24 +836,32 @@ def cmd_check(a):
         mbase, _, mver = read_manifest(path)
         stale_manifest = mver is not None and mver != MANIFEST_VERSION
         if stale_manifest:
-            errors.append(f"[상태] 매니페스트 형식 v{mver} (현재 v{MANIFEST_VERSION}, 해시 방식 변경) — "
-                          "준비 명령에 --refresh 를 붙여 갱신할 것")
+            errors.append(tr(f"[상태] 매니페스트 형식 v{mver} (현재 v{MANIFEST_VERSION}, 해시 방식 변경) — "
+                             "준비 명령에 --refresh 를 붙여 갱신할 것",
+                             f"[state] manifest format v{mver} (current v{MANIFEST_VERSION}, hashing changed) — "
+                             "refresh it by running the prepare command with --refresh"))
         if fm.get("branch") and fm["branch"] != s["branch"]:
-            errors.append(f"[상태] branch {fm['branch']} ≠ 현재 {s['branch']}")
+            errors.append(tr(f"[상태] branch {fm['branch']} ≠ 현재 {s['branch']}",
+                             f"[state] branch {fm['branch']} ≠ current {s['branch']}"))
         rh = fm.get("head", "")
         if rh == "none":
             if s["head_full"]:
-                errors.append("[상태] head none인데 현재 커밋이 있음")
+                errors.append(tr("[상태] head none인데 현재 커밋이 있음", "[state] head is none but there are commits now"))
         elif rh:
             if recorded_head(root, rh, mbase, s) != s["head_full"]:
-                errors.append(f"[상태] head {rh} ≠ 현재 {s['head']}")
+                errors.append(tr(f"[상태] head {rh} ≠ 현재 {s['head']}", f"[state] head {rh} ≠ current {s['head']}"))
         if fm.get("dirty") and fm["dirty"] != s["dirty"]:
-            errors.append(f"[상태] dirty {fm['dirty']} ≠ 현재 {s['dirty']}")
+            errors.append(tr(f"[상태] dirty {fm['dirty']} ≠ 현재 {s['dirty']}",
+                             f"[state] dirty {fm['dirty']} ≠ current {s['dirty']}"))
         if not stale_manifest and fm.get("worktree") and fm["worktree"] != s["worktree"]:
-            errors.append("[상태] worktree 불일치 — 준비 이후 파일이 바뀌었거나 기계 필드를 옮겨 적지 않음. "
-                          "의도한 변경이면 준비 명령에 --refresh를 붙여 다시 실행하고 상태 스냅샷 문장도 고칠 것")
+            errors.append(tr("[상태] worktree 불일치 — 준비 이후 파일이 바뀌었거나 기계 필드를 옮겨 적지 않음. "
+                             "의도한 변경이면 준비 명령에 --refresh를 붙여 다시 실행하고 상태 스냅샷 문장도 고칠 것",
+                             "[state] worktree mismatch — files changed after prepare, or the machine fields were not "
+                             "copied over. If the change is intended, re-run the prepare command with --refresh and "
+                             "update the State snapshot text too"))
     elif fm.get("status") and fm["status"] not in LIVE + (DRAFT,):
-        warns.append(f"[상태] status {fm['status']} — 상태 일치 검사 생략")
+        warns.append(tr(f"[상태] status {fm['status']} — 상태 일치 검사 생략",
+                        f"[state] status {fm['status']} — state match check skipped"))
 
     # 섹션
     secs, cur_sec = {}, None
@@ -765,37 +872,43 @@ def cmd_check(a):
         elif cur_sec is not None:
             secs[cur_sec].append(line)
 
-    def sec(key):
+    def sec(*keys):
         for title, content in secs.items():
-            if key in title:
+            if any(k.lower() in title.lower() for k in keys):
                 return content
         return None
 
-    for key in REQUIRED_SECTIONS:
-        if sec(key) is None:
-            errors.append(f"[구조] '{key}' 섹션 없음")
+    for keys in REQUIRED_SECTIONS:
+        if sec(*keys) is None:
+            errors.append(tr(f"[구조] '{keys[0]}' 섹션 없음", f"[structure] '{keys[-1]}' section missing"))
     tldr = sec("TL;DR") or []
     first = [l for l in tldr if "▶" in l]
     if not first:
-        errors.append("[구조] TL;DR에 '▶ 첫 행동' 줄이 없음")
-    elif len(re.sub(r"[-*▶\s]|첫\s*행동|:", "", first[0])) < 8:
-        errors.append("[구조] 첫 행동이 너무 짧음 — 파일:라인과 명령까지 구체적으로")
-    nxt = sec("다음 행동")
+        errors.append(tr("[구조] TL;DR에 '▶ 첫 행동' 줄이 없음", "[structure] TL;DR has no '▶ First action' line"))
+    elif len(re.sub(r"[-*▶\s]|첫\s*행동|first\s*action|:", "", first[0], flags=re.I)) < 8:
+        errors.append(tr("[구조] 첫 행동이 너무 짧음 — 파일:라인과 명령까지 구체적으로",
+                         "[structure] first action is too short — be specific, down to file:line and the command"))
+    nxt = sec("다음 행동", "Next actions")
     if nxt is not None and not any("▶" in l for l in nxt):
-        warns.append("[구조] '다음 행동'에 ▶ 첫 행동 표시가 없음")
-    if not any(sec(k) is not None for k in SESSION_SECTIONS):
-        warns.append("[내용] 결정·발견·하지 말 것이 모두 없음 — 이 세션만 아는 정보가 정말 없는지 확인")
-    found = sec("발견") or []
+        warns.append(tr("[구조] '다음 행동'에 ▶ 첫 행동 표시가 없음", "[structure] 'Next actions' has no ▶ first-action marker"))
+    if not any(sec(*k) is not None for k in SESSION_SECTIONS):
+        warns.append(tr("[내용] 결정·발견·하지 말 것이 모두 없음 — 이 세션만 아는 정보가 정말 없는지 확인",
+                        "[content] Decisions, Findings and Do not are all missing — "
+                        "make sure there is really nothing only this session knows"))
+    found = sec("발견", "Findings") or []
     untagged = [l.strip() for l in found if re.match(r"\s*[-*]\s+\S", l) and not re.match(r"\s*[-*]\s+[✅⚠❌❔]", l)]
     if untagged:
-        warns.append(f"[근거] '발견' 항목 {len(untagged)}개에 ✅/⚠️ 태그 없음 (예: {untagged[0][:40]})")
-    reading = [l for l in (sec("읽을 파일") or []) if re.match(r"\s*(\d+\.|[-*])\s+\S", l)]
+        warns.append(tr(f"[근거] '발견' 항목 {len(untagged)}개에 ✅/⚠️ 태그 없음 (예: {untagged[0][:40]})",
+                        f"[evidence] {len(untagged)} 'Findings' item(s) without a ✅/⚠️ tag (e.g. {untagged[0][:40]})"))
+    reading = [l for l in (sec("읽을 파일", "Files to read") or []) if re.match(r"\s*(\d+\.|[-*])\s+\S", l)]
     if not reading:
-        warns.append("[구조] 재개 시 읽을 파일이 비어 있음")
+        warns.append(tr("[구조] 재개 시 읽을 파일이 비어 있음", "[structure] the files to read on resume are empty"))
     elif len(reading) > 5:
-        warns.append(f"[분량] 읽을 파일 {len(reading)}개 — 5개 이하로 줄일 것")
+        warns.append(tr(f"[분량] 읽을 파일 {len(reading)}개 — 5개 이하로 줄일 것",
+                        f"[length] {len(reading)} files to read — cut to 5 or fewer"))
     if len(lines) > 160 or len(text) > 9000:
-        warns.append(f"[분량] {len(lines)}행 · {len(text)}자 — 1~2쪽으로 줄일 것")
+        warns.append(tr(f"[분량] {len(lines)}행 · {len(text)}자 — 1~2쪽으로 줄일 것",
+                        f"[length] {len(lines)} lines · {len(text)} chars — cut to 1–2 pages"))
 
     # 줄 단위 검사: 시크릿 · 맥락 의존 표현 · 경로
     env_vals = local_secrets(root)
@@ -805,15 +918,21 @@ def cmd_check(a):
         known |= {Path(p).name for xy, p in s["status"]}
     seen = set()
     for no, line in enumerate(lines, 1):
-        hits = [name for name, rx in SECRET_PATTERNS if rx.search(line)]
-        hits += [f"{fname}의 {key} 값" for val, (fname, key) in env_vals.items() if val in line]
+        hits = [tr(ko, en) for ko, en, rx in SECRET_PATTERNS if rx.search(line)]
+        hits += [tr(f"{fname}의 {key} 값", f"{key} value in {fname}")
+                 for val, (fname, key) in env_vals.items() if val in line]
         if hits:
-            errors.append(f"[시크릿] {no}행: {', '.join(dict.fromkeys(hits))} — 지우고 변수 이름만 남길 것")
+            names = ", ".join(dict.fromkeys(hits))
+            errors.append(tr(f"[시크릿] {no}행: {names} — 지우고 변수 이름만 남길 것",
+                             f"[secret] line {no}: {names} — remove it and keep only the variable name"))
         if no <= fm_end:
             continue
-        vague = [v for v in VAGUE if v in line]
+        low = line.lower()
+        # 영어 표현은 더 긴 영단어의 일부(that functionality 등)일 때는 빼고, 한국어 조사가 바로 붙는 경우는 잡는다
+        vague = [v for v in VAGUE if (re.search(rf"(?<![a-z]){re.escape(v)}(?![a-z])", low) if v.isascii() else v in low)]
         if vague:
-            warns.append(f"[맥락 의존] {no}행: '{vague[0]}' — 대상의 이름으로 바꿀 것")
+            warns.append(tr(f"[맥락 의존] {no}행: '{vague[0]}' — 대상의 이름으로 바꿀 것",
+                            f"[context] line {no}: '{vague[0]}' — replace it with the name of what it refers to"))
         for tok in re.findall(r"`([^`\s]+)`", line):
             c = candidate_path(tok)
             if not c or c in seen:
@@ -824,7 +943,8 @@ def cmd_check(a):
                 continue
             if is_git and "/" in c and git(root, "rev-parse", "--verify", "-q", c) is not None:
                 continue  # 브랜치 등 ref
-            warns.append(f"[경로] {no}행: `{c}` 없음 — 새로 만들 파일이 아니면 경로 확인")
+            warns.append(tr(f"[경로] {no}행: `{c}` 없음 — 새로 만들 파일이 아니면 경로 확인",
+                            f"[path] line {no}: `{c}` not found — check the path unless it is a file still to be created"))
 
     # 통과한 next/ 의 작업지시서는 여기서 비로소 "살아 있는" NAP 가 된다: draft → active, 이전 NAP → superseded
     promoted = []
@@ -838,21 +958,22 @@ def cmd_check(a):
             pfm, _, ptext, _ = read_nap(pp)
             if pfm.get("status") in LIVE and pfm.get("branch") == fm.get("branch"):
                 save(pp, set_fm(ptext, "status", "superseded"))
-                promoted.append(f"이전 NAP superseded: {prev}")
+                promoted.append(tr(f"이전 NAP superseded: {prev}", f"previous NAP superseded: {prev}"))
             moved = sweep(root, pp.parent)
             if moved:
-                promoted.append(f"보관: {rel(moved, root)}")
+                promoted.append(tr(f"보관: {rel(moved, root)}", f"archived: {rel(moved, root)}"))
 
-    print(f"NAP 검사: {rel(path, root)}")
+    print(tr(f"NAP 검사: {rel(path, root)}", f"NAP check: {rel(path, root)}"))
     if errors:
-        print(f"오류 {len(errors)}")
+        print(tr(f"오류 {len(errors)}", f"Errors {len(errors)}"))
         print("\n".join(f"  - {e}" for e in errors))
     if warns:
-        print(f"경고 {len(warns)}")
+        print(tr(f"경고 {len(warns)}", f"Warnings {len(warns)}"))
         print("\n".join(f"  - {w}" for w in warns))
-    print("결과: " + ("실패" if errors else ("통과 (경고 검토)" if warns else "통과")))
+    print(tr("결과: ", "Result: ") + (tr("실패", "FAIL") if errors else (
+        tr("통과 (경고 검토)", "PASS (review warnings)") if warns else tr("통과", "PASS"))))
     if promoted:
-        print("승격: " + " · ".join(promoted))
+        print(tr("승격: ", "Promoted: ") + " · ".join(promoted))
     return 1 if errors else 0
 
 
@@ -862,14 +983,15 @@ def cmd_drift(a):
     root, is_git = resolve_root(a.root)
     path = nap_path(a.file, root)
     if path is None or not path.exists():
-        print(f"NAP 없음: {path or NEXT + '/ 에 작업지시서가 없음'}")
+        print(tr(f"NAP 없음: {path or NEXT + '/ 에 작업지시서가 없음'}", f"No NAP: {path or NEXT + '/ has no handoff doc'}"))
         return 2
     fm = read_nap(path)[0]
     s = state(root, is_git)
     verdict, details = drift(root, fm, s, path)
-    print(f"NAP: {rel(path, root)} — 기록 {fm.get('branch', '?')} @ {fm.get('head', '?')} ({fm.get('created', '?')})")
-    print(f"현재: {s['branch']} @ {s['head']}")
-    print(f"판정: {verdict}")
+    print(f"NAP: {rel(path, root)} — " + tr("기록 ", "recorded ")
+          + f"{fm.get('branch', '?')} @ {fm.get('head', '?')} ({fm.get('created', '?')})")
+    print(tr("현재: ", "Now: ") + f"{s['branch']} @ {s['head']}")
+    print(tr("판정: ", "Verdict: ") + verdict)
     for title, content in details:
         if content:
             print(f"\n[{title}]\n{content}")
@@ -880,57 +1002,72 @@ def cmd_mark(a):
     root, _ = resolve_root(a.root)
     path = nap_path(a.file, root)
     if path is None or not path.exists():
-        print(f"NAP 없음: {path or NEXT + '/ 에 작업지시서가 없음'}")
+        print(tr(f"NAP 없음: {path or NEXT + '/ 에 작업지시서가 없음'}", f"No NAP: {path or NEXT + '/ has no handoff doc'}"))
         return 1
     fm, _, text, _ = read_nap(path)
     if fm.get("status") == DRAFT:
-        print(f"{rel(path, root)} 는 미완성 초안(draft) — 재개 대상이 아님. "
-              "previous 의 NAP 경로를 --file 로 넘기거나, 초안을 완성해 check 로 승격할 것")
+        print(tr(f"{rel(path, root)} 는 미완성 초안(draft) — 재개 대상이 아님. "
+                 "previous 의 NAP 경로를 --file 로 넘기거나, 초안을 완성해 check 로 승격할 것",
+                 f"{rel(path, root)} is an unfinished draft — not something to resume. "
+                 "Pass the previous NAP path with --file, or finish the draft and promote it with check"))
         return 1
     text = set_fm(text, "status", a.status)
     if a.status == "resumed":
         text = set_fm(text, "resumed", now_iso())
     save(path, text)
-    print(f"상태 변경: {rel(path, root)} → {a.status}")
+    print(tr(f"상태 변경: {rel(path, root)} → {a.status}", f"Status changed: {rel(path, root)} → {a.status}"))
     if a.status == "done":
         moved = sweep(root, path.parent)
         if moved:
-            print(f"보관: 날짜 폴더에 살아 있는 NAP 가 없어 {rel(moved, root)} 로 옮김")
+            print(tr(f"보관: 날짜 폴더에 살아 있는 NAP 가 없어 {rel(moved, root)} 로 옮김",
+                     f"Archived: no live NAP left in the date folder; moved to {rel(moved, root)}"))
     return 0
 
 
 def main(argv=None):
+    global UI_LANG
     for stream in (sys.stdout, sys.stderr):
         try:
             stream.reconfigure(encoding="utf-8")
         except Exception:
             pass
-    ap = argparse.ArgumentParser(prog="nap.py", description=__doc__,
+    # 파서를 만들기 전에 정해야 --help 도 그 언어로 나온다 — --lang 을 미리 훑고, 잘못된 값은 본 파서가 알린다
+    pre = argparse.ArgumentParser(add_help=False)
+    pre.add_argument("--lang")
+    pre_lang = pre.parse_known_args(argv)[0].lang
+    UI_LANG = pre_lang if pre_lang in ("ko", "en") else env_lang()
+    ap = argparse.ArgumentParser(prog="nap.py", description=tr(__doc__, DESCRIPTION_EN),
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     def add(name):
         p = sub.add_parser(name)
         p.add_argument("--root", default="")
+        p.add_argument("--lang", choices=("ko", "en"), help=tr("메시지·초안 언어 (기본: HANDOFF_LANG → 로캘)",
+                                                               "message and draft language (default: HANDOFF_LANG → locale)"))
         return p
 
     add("snapshot")
     p = add("prepare")
     p.add_argument("--session", nargs="?", default="", const="")
-    p.add_argument("--refresh", action="store_true", help="새 번호 없이 최신 작업지시서의 기계 필드만 갱신")
-    p.add_argument("--force", action="store_true", help="활성 NAP 에 변화가 없어도 새 NAP 를 준비")
+    p.add_argument("--refresh", action="store_true", help=tr(
+        "새 번호 없이 최신 작업지시서의 기계 필드만 갱신", "refresh only the latest handoff doc's machine fields, no new number"))
+    p.add_argument("--force", action="store_true", help=tr(
+        "활성 NAP 에 변화가 없어도 새 NAP 를 준비", "prepare a new NAP even if the active NAP has no changes"))
     add("check").add_argument("file", nargs="?")
     add("drift").add_argument("file", nargs="?")
     p = add("mark")
     p.add_argument("status", choices=["resumed", "done"])
     p.add_argument("--file")
     a = ap.parse_args(argv)
+    if a.lang:
+        UI_LANG = a.lang
     cmds = dict(snapshot=cmd_snapshot, prepare=cmd_prepare, check=cmd_check,
                 drift=cmd_drift, mark=cmd_mark)
     try:
         return cmds[a.cmd](a)
     except RuntimeError as e:
-        print(f"실패: {e}")
+        print(tr(f"실패: {e}", f"Failed: {e}"))
         return 2
 
 

@@ -2,6 +2,8 @@
 # nap.py 결정적 회귀 테스트. 모델 없이 스크립트 동작만 검증한다.
 # 사용: bash evals/test_nap.sh   (스킬 폴더 어디서 실행해도 됨)
 set -uo pipefail
+# 기존 단언은 한국어 메시지를 대조하므로 로캘과 무관하게 한국어로 고정한다 ([H]·[I]는 --lang·변수로 따로 지정)
+export HANDOFF_LANG=ko
 # python3 가 Windows 스토어 별칭(실행 실패)이면 nap.sh 와 같은 후보 순서로 실제 인터프리터를 쓴다
 for PY in python3 python "py -3"; do $PY -c "" >/dev/null 2>&1 && break; done
 python3() { $PY "$@"; }
@@ -19,6 +21,15 @@ sub()      { python3 -c "import sys;p,a,b=sys.argv[1:];t=open(p,encoding='utf-8'
 droplast() { python3 -c "import sys;p=sys.argv[1];L=open(p,encoding='utf-8').read().splitlines(True);open(p,'w',encoding='utf-8',newline='').write(''.join(L[:-1]))" "$1"; }
 # prepare 출력에서 새 초안 경로(next/yyyy-mm-dd/rN.md)를 꺼낸다
 napof() { sed -n 's/^- 초안 생성: \([^ ]*\) .*/\1/p' "$1" | tr -d '\r'; }
+napof_en() { sed -n 's/^- Draft created: \([^ ]*\) .*/\1/p' "$1" | tr -d '\r'; }
+# 파일에서 한글이 남은 줄 — 경로 토큰은 빼고 본다 (임시 폴더·사용자 이름에 한글이 있을 수 있다)
+hangul() { python3 - "$1" <<'PY'
+import re, sys
+for line in open(sys.argv[1], encoding="utf-8", errors="replace").read().splitlines():
+    if re.search("[\u1100-\u11ff\u3130-\u318f\uac00-\ud7a3]", re.sub(r"\S*[/\\]\S*", "", line)):
+        sys.stdout.buffer.write((line + "\n").encode("utf-8"))
+PY
+}
 # 골든 NAP 본문에 prepare가 출력한 기계 필드를 입힌다 (모델이 하는 일을 결정적으로 재현). status 는 draft 로 들어와 check 가 올린다
 apply_fields() { python3 - "$1" "$2" <<'PY'
 import re, sys
@@ -134,5 +145,67 @@ cp "$HERE/golden/nap_payhook.md" "$H2/$N7"; apply_fields "$T/prep7.txt" "$H2/$N7
 out=$(python3 "$NAP" check --root "$H2"); has "$out" "보관: next/archive/2000-01-01" "살아 있는 NAP 없는 이전 날짜 폴더는 검사 통과 시 보관"
 [ ! -e "$H2/next/2000-01-01" ] && [ -f "$H2/next/archive/2000-01-01/r1.md" ] && [ -f "$H2/$N7" ] \
   && ok "옛 폴더만 옮기고 새 NAP는 제자리" || bad "옛 폴더만 옮기고 새 NAP는 제자리"
+
+echo "[H] 영어: payhook (--lang en)"
+# 영어 출력·초안을 모아 마지막에 한글이 섞였는지 본다. 픽스처 커밋 제목·브랜치·영어 골든 제목은 모두 영어다
+E="$T/en"; EN="$T/en.txt"; bash "$FX/setup_payhook.sh" "$E" >/dev/null
+python3 "$NAP" prepare --lang en --root "$E" --session sess-H > "$T/prepH.txt"; NE="$(napof_en "$T/prepH.txt")"
+cat "$T/prepH.txt" "$E/$NE" > "$EN"
+[ "$NE" = "next/$TODAY/r1.md" ] && ok "영어 초안도 오늘 날짜 폴더의 r1" || bad "영어 초안도 오늘 날짜 폴더의 r1 (실제: $NE)"
+has "$(cat "$E/$NE")" "## 0. TL;DR" "영어 초안에 TL;DR 섹션"; has "$(cat "$E/$NE")" "▶ First action" "영어 초안은 영어 템플릿"
+out=$(python3 "$NAP" check --lang en --root "$E"); echo "$out" >> "$EN"
+has "$out" "[unfilled]" "영어 초안 그대로는 검사 실패(자리표시자)"; hasnt "$out" "Promoted" "실패하면 승격하지 않음 (en)"
+cp "$HERE/golden/nap_payhook.en.md" "$E/$NE"; apply_fields "$T/prepH.txt" "$E/$NE"
+out=$(python3 "$NAP" check --lang en --root "$E"); echo "$out" >> "$EN"
+hasre "$out" '^Result: PASS\r?$' "영어 골든 NAP가 오류·경고 없이 통과"; has "$out" "Promoted: status draft → active" "검사 통과 시 draft → active (en)"
+cp "$E/$NE" "$T/leak_en.md"; sub "$T/leak_en.md" 'values not recorded' 'whsec_live_9Fh2kQ7xLm3Pz8RtVb'
+out=$(python3 "$NAP" check "$T/leak_en.md" --lang en --root "$E"); echo "$out" >> "$EN"
+has "$out" "[secret]" ".env 값 유출을 오류로 잡음 (en)"; hasnt "$out" "9Fh2kQ7x" "검사 출력에도 비밀값을 노출하지 않음 (en)"
+cp "$E/$NE" "$T/vague_en.md"; sub "$T/vague_en.md" 'Note: start with' 'Note: As discussed, start with'
+out=$(python3 "$NAP" check "$T/vague_en.md" --lang en --root "$E"); echo "$out" >> "$EN"
+hasre "$out" "\[context\] line [0-9]+: 'as discussed'" "영어 맥락 의존 표현을 대소문자 무시로 잡음"
+has "$out" "Result: PASS (review warnings)" "맥락 의존 표현은 오류가 아니라 경고 (en)"
+out=$(python3 "$NAP" prepare --lang en --root "$E"); rc=$?; echo "$out" >> "$EN"
+has "$out" "Nothing to hand off" "변화 없는 활성 NAP 위에 prepare → 가드 (en)"; [ $rc -eq 1 ] && ok "가드 exit 1 (en)" || bad "가드 exit 1 (en)"
+bash "$FX/drift_payhook.sh" "$E" >/dev/null
+out=$(python3 "$NAP" drift --lang en --root "$E"); rc=$?; echo "$out" >> "$EN"
+has "$out" "Verdict: DRIFT" "드리프트 판정 (en)"; has "$out" "1 new commit(s)" "새 커밋 감지 (en)"
+has "$out" "newly changed  src/payhook/handler.py" "인수인계 이후 바뀐 파일만 지목 (en)"; [ $rc -eq 1 ] && ok "drift exit 1 (en)" || bad "drift exit 1 (en)"
+out=$(python3 "$NAP" snapshot --lang en --root "$E"); echo "$out" >> "$EN"; has "$out" "- Drift: DRIFT" "스냅샷이 드리프트를 표시 (en)"
+out=$(python3 "$NAP" mark resumed --lang en --root "$E"); echo "$out" >> "$EN"; has "$out" "Status changed: $NE → resumed" "mark resumed (en)"
+out=$(python3 "$NAP" mark done --lang en --root "$E"); echo "$out" >> "$EN"; has "$out" "Status changed: $NE → done" "mark done (en)"
+has "$out" "Archived: no live NAP left in the date folder; moved to next/archive/$TODAY" "마지막 활성 NAP가 끝나면 보관 안내 (en)"
+[ -n "$(hangul "$T/prep.txt")" ] && ok "한글 검사 도우미가 한국어 출력은 잡음" || bad "한글 검사 도우미가 한국어 출력은 잡음"
+left="$(hangul "$EN")"
+[ -z "$left" ] && ok "영어 출력·초안에 한글 없음 (경로 제외)" || { bad "영어 출력·초안에 한글 없음 (경로 제외)"; echo "$left" | sed 's/^/        | /' | head -20; }
+
+echo "[I] 언어 교차·언어 선택"
+X="$T/cross"; bash "$FX/setup_payhook.sh" "$X" >/dev/null
+python3 "$NAP" prepare --root "$X" --session sess-I > "$T/prepI.txt"; NX="$(napof "$T/prepI.txt")"
+cp "$HERE/golden/nap_payhook.md" "$X/$NX"; apply_fields "$T/prepI.txt" "$X/$NX"
+out=$(python3 "$NAP" check --lang en --root "$X"); has "$out" "Result: PASS" "한국어 NAP를 --lang en 으로 검사 통과 (영어 메시지)"
+has "$out" "Promoted: status draft → active" "한국어 NAP도 --lang en 검사 통과 시 승격"
+cp "$HERE/golden/nap_payhook.en.md" "$T/cross_en.md"; apply_fields "$T/prepI.txt" "$T/cross_en.md"
+out=$(python3 "$NAP" check "$T/cross_en.md" --lang ko --root "$X"); has "$out" "결과: 통과" "영어 NAP를 --lang ko 로 검사 통과 (한국어 메시지)"
+# 자리표시자는 두 템플릿의 합집합으로 찾으므로, 명령 예시의 흔한 <…> 인자가 미작성으로 잡히면 안 된다
+cp "$HERE/golden/nap_payhook.md" "$T/args_ko.md"; apply_fields "$T/prepI.txt" "$T/args_ko.md"
+sub "$T/args_ko.md" '- 최근 커밋:' '- 최근 커밋(`git show <commit>`·`git log -- <path>`로 확인):'
+out=$(python3 "$NAP" check "$T/args_ko.md" --root "$X"); has "$out" "결과: 통과" "한국어 NAP의 명령 인자 <commit>·<path>는 미작성 아님"
+cp "$T/cross_en.md" "$T/args_en.md"; sub "$T/args_en.md" '- Recent commits:' '- Recent commits (see `git show <commit>`, `git log -- <path>`):'
+out=$(python3 "$NAP" check "$T/args_en.md" --lang en --root "$X"); has "$out" "Result: PASS" "영어 NAP의 명령 인자 <commit>·<path>는 미작성 아님"
+# 영어 맥락 의존 표현은 더 긴 영단어의 일부면 잡지 않고, 한국어 조사가 바로 붙어도 잡는다
+cp "$T/cross_en.md" "$T/word_en.md"; sub "$T/word_en.md" '- Recent commits:' '- Recent commits (that functionality landed in b2e7f62):'
+out=$(python3 "$NAP" check "$T/word_en.md" --lang en --root "$X"); hasnt "$out" "[context]" "영단어 일부(that functionality)는 맥락 의존 표현이 아님"
+cp "$HERE/golden/nap_payhook.md" "$T/word_ko.md"; apply_fields "$T/prepI.txt" "$T/word_ko.md"
+sub "$T/word_ko.md" '- 최근 커밋:' '- 최근 커밋(just now에 확인):'
+out=$(python3 "$NAP" check "$T/word_ko.md" --root "$X"); has "$out" "[맥락 의존]" "영어 표현에 한국어 조사가 붙어도 잡음"
+out=$(python3 "$NAP" prepare --help --lang en); has "$out" "refresh only the latest" "--help 도 --lang 을 따름 (en)"
+out=$(HANDOFF_LANG=en python3 "$NAP" prepare --help --lang ko); has "$out" "새 번호 없이" "--help 도 --lang 을 따름 (ko)"
+# 앞에 붙인 변수는 bash 가 함수(python3) 호출 동안 export 하므로 자식 파이썬에 전달된다
+L="$T/plain"; mkdir -p "$L"
+out=$(HANDOFF_LANG=ko python3 "$NAP" snapshot --lang en --root "$L"); has "$out" "Not a git repository" "--lang 이 HANDOFF_LANG 보다 우선"
+out=$(HANDOFF_LANG=en LC_ALL= LC_MESSAGES= LANG=ko_KR.UTF-8 python3 "$NAP" snapshot --root "$L"); has "$out" "Not a git repository" "HANDOFF_LANG 이 LANG 보다 우선"
+out=$(HANDOFF_LANG= LC_ALL= LC_MESSAGES= LANG=ko_KR.UTF-8 python3 "$NAP" snapshot --root "$L"); has "$out" "git 저장소가 아님" "변수가 비면 LANG=ko_KR.UTF-8 → 한국어"
+out=$(HANDOFF_LANG= LC_ALL= LC_MESSAGES= LANG=en_US.UTF-8 python3 "$NAP" snapshot --root "$L"); has "$out" "Not a git repository" "변수가 비면 LANG=en_US.UTF-8 → 영어"
 
 echo; echo "결과: PASS $pass · FAIL $fail"; [ $fail -eq 0 ]

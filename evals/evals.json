@@ -3,7 +3,8 @@
   "grading": {
     "script": "python3 evals/grade.py <iteration 폴더>",
     "outputs": "실행기가 각 eval-<id>-*/with_skill/outputs/ 에 저장해야 하는 파일 — 작성 모드: CURRENT.md(준비 명령이 만든 next/<날짜>/rN.md 사본), prepare.txt·check.txt(준비·검사 명령의 표준 출력). 재개 모드: drift.txt(드리프트 명령 출력), response.md(모델 응답 전문), post_state.txt(1행 최신 작업지시서의 `grep '^status:'`, 2행 드리프트 명령의 '판정:' 행)",
-    "deterministic": "bash evals/test_nap.sh — 모델 없이 nap.py 만 검증"
+    "deterministic": "bash evals/test_nap.sh — 모델 없이 nap.py 만 검증",
+    "lang": "eval 1~3 은 한국어 시나리오 — HANDOFF_LANG=ko 로 실행한다 (grade.py 가 '결과: 통과' 같은 한국어 메시지를 읽는다)"
   },
   "trigger_evals": [
     {"prompt": "컨텍스트 거의 찼어. 인수인계 문서 써줘", "should_trigger": true},
@@ -13,7 +14,15 @@
     {"prompt": "로그인 세션이 만료되면 dev-login 으로 전환되게 해줘", "should_trigger": false, "note": "HTTP 세션 전환"},
     {"prompt": "통합 Job관리에서 중단된 배치 재개 버튼이 안 눌려", "should_trigger": false, "note": "배치 재개"},
     {"prompt": "다음에 뭐 하면 돼?", "should_trigger": false},
-    {"prompt": "이 변경 사항 커밋 메시지 써줘", "should_trigger": false}
+    {"prompt": "이 변경 사항 커밋 메시지 써줘", "should_trigger": false},
+    {"prompt": "Context is almost full. Write a handoff doc.", "should_trigger": true},
+    {"prompt": "That's it for today. Wrap things up so another session can pick this up tomorrow.", "should_trigger": true},
+    {"prompt": "Let's continue the work from the previous session.", "should_trigger": true},
+    {"prompt": "Move the DB session cleanup logic to the lifespan shutdown hook.", "should_trigger": false, "note": "DB 세션은 도메인 용어"},
+    {"prompt": "When the login session expires, switch to dev-login.", "should_trigger": false, "note": "HTTP 세션 전환"},
+    {"prompt": "The resume button for stopped batch jobs on the job management page doesn't work.", "should_trigger": false, "note": "배치 재개"},
+    {"prompt": "What should I do next?", "should_trigger": false},
+    {"prompt": "Write a commit message for these changes.", "should_trigger": false}
   ],
   "evals": [
     {
