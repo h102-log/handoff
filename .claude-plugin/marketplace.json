@@ -1,0 +1,12 @@
+{
+  "name": "handoff",
+  "description": "handoff 스킬 하나를 담은 마켓플레이스",
+  "owner": { "name": "h102-log" },
+  "plugins": [
+    {
+      "name": "handoff",
+      "source": "./",
+      "description": "코딩 세션 인수인계 작업지시서(NAP) 작성·재개"
+    }
+  ]
+}

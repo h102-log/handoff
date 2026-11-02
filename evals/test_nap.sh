@@ -2,6 +2,9 @@
 # nap.py 결정적 회귀 테스트. 모델 없이 스크립트 동작만 검증한다.
 # 사용: bash evals/test_nap.sh   (스킬 폴더 어디서 실행해도 됨)
 set -uo pipefail
+# python3 가 Windows 스토어 별칭(실행 실패)이면 nap.sh 와 같은 후보 순서로 실제 인터프리터를 쓴다
+for PY in python3 python "py -3"; do $PY -c "" >/dev/null 2>&1 && break; done
+python3() { $PY "$@"; }
 HERE="$(cd "$(dirname "$0")" && pwd)"; NAP="$HERE/../scripts/nap.py"; FX="$HERE/fixtures"
 T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
 TODAY="$(date +%F)"  # nap.py 가 쓰는 로컬 날짜(dt.date.today())와 같다

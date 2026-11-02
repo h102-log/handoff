@@ -5,8 +5,8 @@
 #   Case 3 스킬 없이 작업지시서 → 새 세션 · Case 4 실제 /handoff → 새 세션에서 실제 /handoff resume
 #   작성 단계는 모두 같은 1턴(세션 기록)을 먼저 넣고, 2턴(--resume)에서 조건별 명령을 준다
 #
-# 위치: .claude/skills/handoff/evals/run_4way_ab_test.sh
-# 사용법: bash .claude/skills/handoff/evals/run_4way_ab_test.sh [결과_저장_폴더] [라운드 수(기본 1)]
+# 위치: evals/run_4way_ab_test.sh (스킬 폴더 기준)
+# 사용법: bash evals/run_4way_ab_test.sh [결과_저장_폴더] [라운드 수(기본 1)]
 #   라운드는 동시에 돈다. 결과 폴더는 프로젝트 밖을 권한다(기본: 임시 폴더) — 상위 폴더의 CLAUDE.md 가 섞이지 않게
 #   채점은 grade_ab.py (공통 항목은 양식이 아니라 내용으로). 모델 없이 채점만 확인: python grade_ab.py selftest
 #   싸게 배선만 확인: MODEL=haiku bash … <폴더> 1
@@ -25,7 +25,7 @@ FX="$HERE/fixtures"
 
 OUT_ROOT="${1:-$(mktemp -d -t work.XXXXXX)}"
 ROUNDS="${2:-1}"
-MODEL="${MODEL:-claude-opus-5-5}"   # 사용자 설정(opus·xhigh)과 같게
+MODEL="${MODEL:-claude-opus-5-5}"   # 실험 당시 작성자 설정(opus·xhigh)과 같게
 mkdir -p "$OUT_ROOT"; OUT_ROOT="$(cd "$OUT_ROOT" && pwd)"
 # 채점 파일은 픽스처 저장소 밖에 — 안에 두면 worktree 해시가 바뀌어 검사가 실패하고, 재개 세션이 그 파일을 본다
 G="$OUT_ROOT/grade"
@@ -39,7 +39,7 @@ if ! command -v claude >/dev/null 2>&1; then
     exit 1
 fi
 # 같은 이름이면 전역 ~/.claude/skills/handoff 가 로드된다(2026-10-15 실측: Base directory 가 전역 경로) — 이 저장소 판과 같을 때만 돈다
-if ! diff -rq --strip-trailing-cr -x evals -x .gitattributes -x __pycache__ -x .specgate-log.jsonl \
+if ! diff -rq --strip-trailing-cr -x .git -x evals -x .gitattributes -x __pycache__ -x .specgate-log.jsonl \
         "$HOME/.claude/skills/handoff" "$SKILL_DIR" >/dev/null 2>&1; then
     echo "⚠️ 전역 ~/.claude/skills/handoff 가 이 저장소 판과 다릅니다. Case 4 는 전역 판으로 돌기 때문에 맞춘 뒤 다시 실행해 주세요."
     exit 1
@@ -60,7 +60,7 @@ UNSET=(); for v in $(compgen -e | grep -E '^(CLAUDE|AI_AGENT)' || true); do UNSE
 # [의도] 실패가 /dev/null 에 묻히지 않게 하고, MCP 서버(claude.ai 커넥터 등)의 무관한 도구·지시를 섞지 않는다
 # [이유] MSYS_NO_PATHCONV=1 이 없으면 Git Bash 가 "/handoff"·"/compact" 를 "C:/Program Files/Git/handoff" 로 바꿔
 #        스킬이 전개되지 않았다(2026-10-15 실측). --tools 는 목록 밖 도구(Skill·AskUserQuestion 등)를 숨긴다.
-#        --permission-prompts none 은 묻는 대신 거부해 -p 실행이 멈추지 않게 한다(옛 A/B 파일럿 결정, next/2026-10-14/r1.md).
+#        --permission-prompts none 은 묻는 대신 거부해 -p 실행이 멈추지 않게 한다(옛 A/B 파일럿 결정, h102-log/td-proj next/archive/2026-10-14/r1.md).
 #        바깥 세션 변수(CLAUDECODE 등)는 옛 stage1.py 도 지우고 돌렸다. 훅·플러그인은 조건마다 같게 둔다
 claude_run() {  # <작업 폴더> <기록 jsonl> <도구 목록> <프롬프트> [추가 인자…]
     local dir="$1" log="$2" tools="$3" prompt="$4"; shift 4
