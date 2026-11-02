@@ -13,5 +13,5 @@ for py in python3 python "py -3"; do
         exec $py "$(dirname "$0")/nap.py" "$@"
     fi
 done
-echo "nap.sh: python 을 찾지 못했다 (python3 · python · py -3)" >&2
+echo "nap.sh: python not found (python3 · python · py -3) / python 을 찾지 못했다" >&2
 exit 127

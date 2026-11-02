@@ -1,98 +1,105 @@
-# 작성 모드
+# Write mode
 
-목표는 하나다. 이 대화를 전혀 모르는 다음 세션이 이 문서 하나만 읽고 몇 분 안에
-첫 행동을 시작할 수 있게 만드는 것. 코드와 git에서 다시 알아낼 수 있는 것은 가리키기만
-하고, 이 세션만 알고 있는 것(왜 그렇게 했는지, 무엇이 실패했는지, 다음에 정확히 무엇을
-할지)에 지면을 쓴다.
+There is one goal: make it possible for a next session that knows nothing about this conversation to read this one
+document and start the first action within a few minutes. Anything that can be found again from the code and git is
+only pointed to; the space goes to what only this session knows (why it was done that way, what failed, exactly what
+to do next).
 
-## 1. 안전한 지점에서 멈춘다
+## 1. Stop at a safe point
 
-- 진행 중인 편집은 원자적인 단위(문법이 깨지지 않고 테스트를 돌릴 수 있는 지점)까지만
-  마무리한다. 오래 걸릴 것 같으면 멈추고, 반쯤 적용된 상태를 파일·함수 단위로 정확히
-  기록한다. 다음 세션이 "어디까지 고쳤는지"를 추측하게 만드는 것이 가장 비싼 실패다.
-- 새 작업을 시작하지 않는다. git 상태를 바꾸지 않는다.
+- Finish in-progress edits only up to an atomic unit (a point where the syntax is not broken and tests can run). If
+  that looks like it will take long, stop and record the half-applied state precisely, per file and function. Making
+  the next session guess "how far the fix got" is the most expensive failure.
+- Do not start new work. Do not change git state.
 
-## 2. 사실을 모은다
+## 2. Gather the facts
 
-- SKILL.md 상단 스냅샷을 기준으로 삼는다. git 상태를 기억으로 적지 않는다.
-- 스냅샷의 최신 작업지시서를 확인한다. 다른 브랜치의 활성 NAP라면 병행 작업일 수
-  있으니 사용자에게 알린다. 새 NAP는 다음 번호로 생기고 기존 파일은 그대로 남는다.
-- 테스트·빌드 결과는 이 대화에서 실제로 확인된 것만 적고, 확인 시각과 "재실행 안 함"을
-  함께 적는다. 다시 돌리는 것은 빠른 명령이고 사용자가 원할 때만.
-- Todo 목록을 쓰고 있었다면 진행 상태를 반영한다.
+- Use the snapshot at the top of SKILL.md as the baseline. Do not write git state from memory.
+- Check the snapshot's latest handoff doc. If it is an active NAP from another branch, it may be parallel work, so tell
+  the user. The new NAP gets the next number and the existing file stays as it is.
+- Write down only test and build results actually confirmed in this conversation, together with when they were checked
+  and "not re-run". Re-running them is only for quick commands, and only when the user wants it.
+- If you were using a Todo list, reflect its progress.
 
-## 3. 세션을 증류한다 (이 문서의 핵심)
+## 3. Distill the session (the core of this document)
 
-다음 세션이 스스로 알아낼 수 없는 것부터 적는다.
+Write first what the next session cannot figure out on its own.
 
-- 결정과 근거, 기각한 대안과 그 이유. 막다른 길을 적지 않으면 다음 세션이 같은 시도를
-  반복한다. 사용자가 금지하거나 선호한 것(의존성 금지, 특정 방식 선호 등)도 포함한다.
-- 발견한 함정과 비직관적인 동작.
-- 열린 질문과 사용자 결정이 필요한 것.
+- Decisions and their rationale, rejected alternatives and why. If dead ends are not written down, the next session
+  repeats the same attempts. Include what the user forbade or preferred (no new dependencies, a preferred approach,
+  etc.).
+- Pitfalls found and non-intuitive behavior.
+- Open questions and things that need the user's decision.
 
-모든 사실 주장에 근거 등급을 붙인다.
+Attach an evidence grade to every factual claim.
 
-- ✅ 확인: 명령 출력·테스트 결과·파일 내용으로 확인한 것. 근거를 함께 적는다.
-- ⚠️ 추정: 추론했거나, 기억에 의존했거나, 확인하지 못한 것. 재확인 방법을 적는다.
+- ✅ Verified: confirmed by command output, test results or file contents. Write the evidence alongside.
+- ⚠️ Assumed: inferred, relied on memory, or not verified. Write how to recheck it.
 
-애매하면 ⚠️로 둔다. 다음 세션은 ⚠️ 항목을 재검증하지만 ✅는 믿고 쓰므로, 과신한 ✅가
-틀린 ⚠️보다 훨씬 위험하다. 이 세션 안에서 틀렸다가 바로잡힌 내용은 바로잡힌 쪽만
-적고, 틀렸던 접근은 "하지 말 것"으로 옮긴다.
+When in doubt, use ⚠️. The next session re-verifies ⚠️ items but trusts and uses ✅ ones, so an overconfident ✅ is far
+more dangerous than a wrong ⚠️. For something that was wrong and then corrected within this session, write only the
+corrected version, and move the wrong approach to "Do not".
 
-## 4. 다음 행동을 설계한다
+## 4. Design the next actions
 
-- ▶ 첫 행동은 하나만, `파일:라인`(또는 `파일:함수`)과 실행할 명령까지 구체적으로 쓴다.
-  "계속 구현", "마저 정리" 같은 표현은 다음 세션에 탐색 비용을 떠넘긴다.
-- 이후 단계마다 완료 기준(검증 명령과 기대 결과)을 붙인다.
-- 재개 시 읽을 파일은 우선순위순 최대 5개. 다음 세션의 깨끗한 컨텍스트를 아끼기 위해서다.
-- 사용자 메모(스킬 인자)가 있으면 TL;DR에 적고 우선순위에 반영한다.
+- ▶ Exactly one first action, written concretely down to `file:line` (or `file:function`) and the command to run.
+  Phrases like "continue implementing" or "finish cleaning up" push the exploration cost onto the next session.
+- Attach done criteria (a verification command and the expected result) to every later step.
+- Files to read on resume: at most 5, in priority order. This is to save the next session's clean context.
+- If there is a user note (the skill argument), write it in the TL;DR and reflect it in the priorities.
 
-## 5. 기록한다
+## 5. Record
 
-1. 준비 명령을 실행한다. 오늘 날짜 폴더에 다음 번호로 기계 필드가 채워진
-   **초안 `next/yyyy-mm-dd/rN.md`(status: draft)** 를 만들고, 그 경로("초안 생성:")와 frontmatter를 출력한다.
-   직접 쓴 rN.md 도 번호에 포함된다. 이후 이 경로를 채운다.
-   "인수인계할 변화 없음"으로 멈추면 재개 모드가 맞는지 사용자에게 확인한다. 파일 변화 없이
-   지식만 늘어난 세션(조사 등)이면 강제 준비 명령(`--force`)으로 진행한다.
-2. 출력된 기계 필드(created·branch·head·dirty·worktree·session·previous)와 `status: draft`는
-   한 글자도 바꾸지 않는다. 재개 시 드리프트 판정의 기준이고, status는 검사 통과 시 스크립트가
-   active로 올린다. title·kind·reason만 채운다.
-3. 템플릿 구조로 초안을 채운다 (Write로 통째로 덮어써도, Edit로 채워도 된다).
-   - 맥락 의존 표현을 쓰지 않는다("아까 그 버그", "위에서 말한 방식"). 대상의 이름을 쓴다.
-   - 코드·diff·로그·스펙은 붙여 넣지 않고 경로·커밋·명령으로 가리킨다. 원본이 기준이다.
-   - 비밀값은 변수 이름만 쓴다.
-   - 내용이 없는 섹션은 지운다. 단, TL;DR·완료 기준·상태 스냅샷·다음 행동·읽을 파일은
-     반드시 남긴다. 전체 1~2쪽을 넘기지 않는다.
-   - 본문은 한국어, 코드·명령·경로·식별자는 원문 그대로.
-   - 조사 세션이면 `kind: research`로 두고, "이번 세션 진행"에 조사 결과와 출처를,
-     "다음 행동"에 실행 계획을 쓴다.
+1. Run the prepare command. It creates a **draft `next/yyyy-mm-dd/rN.md` (status: draft)** with the next number in
+   today's date folder, machine fields filled in, and prints its path ("Draft created:"; Korean "초안 생성:") and frontmatter.
+   Hand-written rN.md files count toward the numbering too. From here on, fill in this path.
+   If it stops with "Nothing to hand off" ("인수인계할 변화 없음"), confirm with the user whether resume mode is the right
+   one. If the session only gained knowledge without file changes (research, etc.), proceed with the prepare (force)
+   command (`--force`).
+2. Do not change a single character of the printed machine fields (created, branch, head, dirty, worktree, session,
+   previous) or `status: draft`. They are the baseline for the drift verdict on resume, and the script raises status to
+   active when check passes. Fill in only title, kind and reason.
+3. Fill in the draft following the template structure (overwriting it whole with Write or filling it in with Edit are
+   both fine).
+   - Do not use context-dependent expressions ("that bug from earlier", "the approach mentioned above"). Write the name
+     of the thing.
+   - Do not paste code, diffs, logs or specs; point to them by path, commit or command. The original is the reference.
+   - For secrets, write only the variable name.
+   - Delete sections with no content. But TL;DR, Done criteria, State snapshot, Next actions and Files to read on resume
+     (sections 0, 1, 2, 6, 9) must always stay. Keep the whole document within 1–2 pages.
+   - Write the body in the user's language and keep the template's section headings as they are (check looks for
+     them); code, commands, paths and identifiers stay verbatim. If the user writes in a language other than Korean or
+     English, use the en template (headings in English) and write the body in their language.
+   - For a research session, set `kind: research`, put the findings and sources under "Progress this session", and the
+     execution plan under "Next actions".
 
-## 6. 검증한다
+## 6. Verify
 
-1. 검사 명령을 실행한다. 오류는 모두 고치고, 경고는 하나씩 판단해 고치거나 유지 이유를
-   보고에 남긴다. 고친 뒤 다시 실행한다. 통과하면 스크립트가 `draft → active`로 승격하고 이전
-   NAP를 superseded로 바꾼다 — 이 시점부터 디스크의 NAP가 인수인계로 유효하다. 이전 NAP의 날짜
-   폴더에 살아 있는 NAP가 남지 않으면 그 폴더는 `next/archive/`로 옮겨진다("보관:" 줄).
-2. 콜드리드는 **한 번만**, 경량 작성(`lite`)이면 생략한다. 이 대화를 모르는 읽기 전용
-   서브에이전트(`subagent_type: Explore`)에게 아래 지시로 맡긴다. 결과를 짧게 제한하는 이유는
-   메인 컨텍스트가 불어나지 않게 하기 위해서다.
+1. Run the check command. Fix every error; judge each warning one by one and either fix it or leave the reason for
+   keeping it in the report. Re-run after fixing. When it passes, the script promotes it `draft → active` and changes
+   the previous NAP to superseded — from this point the NAP on disk is valid as the handoff. If no live NAP remains in
+   the previous NAP's date folder, that folder is moved to `next/archive/` (the "archived:" item; Korean "보관:").
+2. Do the cold read **only once**; skip it for a lite write (`lite`). Hand it to a read-only subagent that knows nothing
+   of this conversation (`subagent_type: Explore`) with the instructions below. The result is kept short so that the
+   main context does not grow.
 
-   > `next/yyyy-mm-dd/rN.md`(준비 명령이 출력한 실제 경로로 바꿔 넣는다)만 읽어라. 파일은 읽기만 하고 절대 수정하지 마라. 이 문서만으로
-   > '첫 행동'을 바로 시작할 수 없게 만드는 문제(정의되지 않은 대명사나 용어, 빠진 경로나
-   > 명령, 서로 모순되는 내용, 근거 없는 단정)를 10줄 이내 목록으로만 답하라.
-   > 문제가 없으면 "없음"이라고만 답하라.
+   > Read only `next/yyyy-mm-dd/rN.md` (replace with the actual path the prepare command printed). Only read the file; never modify it. Answer only with a list of
+   > at most 10 lines of problems that would keep someone from starting the 'first action' right away with this document
+   > alone (undefined pronouns or terms, missing paths or commands, contradictory content, claims without evidence).
+   > If there are no problems, answer only "none". You may answer in the document's language.
 
-3. 지적은 Edit로 해당 줄만 고친다(파일 재작성 금지). 지적을 고칠 정보가 기억에 없으면
-   지어내지 말고 그 항목을 ⚠️로 바꾸고 재확인 방법을 적는다 — 틀린 ✅가 빠진 정보보다 비싸다.
-   고친 뒤 검사 명령을 다시 실행한다. 서브에이전트를 쓸 수 없는 환경이면 같은 질문으로 스스로
-   점검하고, 보고에 "콜드리드 생략"이라고 적는다.
+3. Fix each issue raised with Edit on just that line (do not rewrite the file). If your memory does not hold the
+   information to fix an issue, do not make it up — turn that item into ⚠️ and write how to recheck it; a wrong ✅
+   costs more than missing information. Re-run the check command after fixing. If subagents are not available in this
+   environment, check it yourself with the same question and write "cold read skipped" in the report.
 
-## 7. 보고한다
+## 7. Report
 
-짧게 쓴다.
+Keep it short.
 
-- 저장 위치와 3줄 요약(목표 / 현재 위치 / 첫 행동)
-- 검사 결과, 남긴 경고가 있으면 그 이유
-- 콜드리드: 지적 n건 중 반영 m건, ⚠️ 전환 k건 (생략했으면 그 사실)
-- 다음 세션 시작법: `/clear` → plan 모드 → `/handoff resume`
-- 커밋이 필요해 보이면 제안만 한다. 작업지시서(rN.md)와 archive 로 옮겨진 폴더도 커밋 대상이다.
+- Where it was saved and a 3-line summary (goal / where we are / first action)
+- Check result, and the reason for any warnings left in place
+- Cold read: m of n issues applied, k turned into ⚠️ (or the fact that it was skipped)
+- How to start the next session: `/clear` → plan mode → `/handoff resume`
+- If a commit seems needed, only propose it. The handoff doc (rN.md) and folders moved to archive are also things to
+  commit.

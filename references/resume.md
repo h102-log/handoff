@@ -1,59 +1,60 @@
-# 재개 모드
+# Resume mode
 
-NAP를 그대로 믿지 않는다. 기록과 현재 상태를 독립적으로 대조하고, 추정을 다시 확인한
-뒤에 계획을 세운다. 이전 세션에서 섞여 든 잘못된 정보를 여기서 걸러낸다.
+Do not take the NAP at its word. Compare the record and the current state independently, and re-verify the
+assumptions before making a plan. This is where wrong information that crept in from the previous session is filtered out.
 
-1~4단계는 읽기만 한다. plan 모드에서 실행하는 것을 권장한다.
+Steps 1–4 are read-only. Running them in plan mode is recommended.
 
-## 1. 이어갈 NAP를 고른다
+## 1. Choose the NAP to continue
 
-SKILL.md 상단 스냅샷의 `next/` 항목을 본다.
+Look at the `next/` entry in the snapshot at the top of SKILL.md.
 
-이어갈 NAP가 최신 작업지시서가 아니면, 이후 드리프트·재개 표시·완료 처리 명령에 그 경로를
-넘긴다(드리프트는 위치 인자, mark는 `--file`).
+If the NAP to continue is not the latest handoff doc, pass its path to the drift, mark resumed and mark done commands
+from here on (drift as a positional argument, mark with `--file`).
 
-- 인자에 경로가 있으면 그 NAP를 쓴다. `next/archive/` 안의 파일이면 끝난 작업이므로
-  사용자에게 그 사실을 알리고 어떻게 할지 묻는다.
-- 최신 작업지시서가 현재 브랜치의 활성(active·resumed) NAP면 그것을 쓴다.
-- 최신 작업지시서가 `draft`면 이전 세션의 인수인계가 도중에 끊긴 것이다. 초안은 참고만 하고
-  (자리표시자가 남아 있을 수 있다), frontmatter의 previous가 가리키는 NAP(제자리에 상태가
-  유지돼 있다)를 이어간다. previous가 없으면 초안과 git 상태로 직접 파악한다.
-- 최신 작업지시서가 frontmatter 없이 직접 쓴 문서면 그 문서를 읽고 따른다. 드리프트 판정이
-  없으므로 2단계 대신 `git status`·`git log`로 문서의 상태 서술과 직접 대조한다.
-- 최신 작업지시서가 다른 브랜치의 것이고 스냅샷에 "현재 브랜치의 다른 활성 NAP"가 보이면,
-  그 파일을 이어갈지 사용자에게 묻는다.
-- 작업지시서가 없거나 최신이 done이면 이어갈 것이 없다고 알린다.
+- If the arguments contain a path, use that NAP. If the file is inside `next/archive/`, the work is finished, so tell
+  the user that and ask what to do.
+- If the latest handoff doc is an active (active or resumed) NAP on the current branch, use it.
+- If the latest handoff doc is a `draft`, the previous session's handoff was cut off midway. Use the draft only as a
+  reference (placeholders may remain), and continue the NAP that the frontmatter's previous points to (its status is
+  kept in place). If there is no previous, work it out directly from the draft and the git state.
+- If the latest handoff doc was written by hand without frontmatter, read and follow it. There is no drift verdict, so
+  instead of step 2, compare the document's description of the state directly against `git status` and `git log`.
+- If the latest handoff doc belongs to another branch and the snapshot shows "Other active NAPs on the current branch"
+  ("현재 브랜치의 다른 활성 NAP"), ask the user whether to continue that file.
+- If there is no handoff doc, or the latest one is done, tell the user there is nothing to continue.
 
-## 2. 드리프트를 확인한다
+## 2. Check for drift
 
-스냅샷의 드리프트 판정을 본다.
+Look at the snapshot's drift verdict.
 
-- `CLEAN`이면 다음 단계로 간다.
-- `DRIFT`면 드리프트 명령으로 상세를 확인하고, 계획을 세우기 전에 사용자에게 차이를
-  보고한다. 브랜치 변경, 새 커밋, 히스토리 재작성, 작업 내용 변경이 있을 수 있다.
-  사용자가 직접 한 작업일 수 있으므로 되돌리지 않는다. "작업 내용은 기록 시점과 동일"이면
-  미커밋 변경이 그대로 커밋된 경우라 대개 문제없지만, 그래도 알리고 확인을 받는다.
-- 확인을 받으면 현재 상태를 기준으로 계획을 조정한다.
+- If `CLEAN`, go to the next step.
+- If `DRIFT`, check the details with the drift command and report the differences to the user before making a plan.
+  There may be a branch change, new commits, rewritten history, or changed work content. It may be work the user did
+  themselves, so do not revert it. If the drift output says "work content is the same as recorded"
+  ("작업 내용은 기록 시점과 동일"), the uncommitted changes were committed as they were, which is usually fine, but
+  still tell the user and get confirmation.
+- Once confirmed, adjust the plan to the current state.
 
-## 3. 추정을 다시 확인한다
+## 3. Re-verify the assumptions
 
-- NAP의 ⚠️ 항목을 하나씩 재확인한다(파일 읽기, 검색, 읽기 전용 명령). 결과는
-  ✅ 확인 / ❌ 반증 / ❔ 여전히 불명으로 분류한다.
-- ✅ 항목 중 첫 행동이 직접 기대는 것은 가볍게 재확인한다.
-- 반증된 항목이 다음 행동에 영향을 주면 계획을 고친다.
+- Re-verify the NAP's ⚠️ items one by one (reading files, searching, read-only commands). Classify the results as
+  ✅ verified / ❌ disproved / ❔ still unknown.
+- Among the ✅ items, lightly re-verify the ones the first action directly relies on.
+- If a disproved item affects the next actions, fix the plan.
 
-## 4. 계획을 제시한다
+## 4. Present the plan
 
-- "재개 시 읽을 파일"만 연다. 더 필요해지면 그때 연다.
-- Todo 목록을 NAP의 다음 행동으로 다시 만든다.
-- 사용자에게 다음을 보여 준다: 이해한 내용 3줄, 드리프트·재검증 결과, 첫 행동부터의
-  실행 계획, NAP의 열린 질문. plan 모드라면 승인을 받는다.
+- Open only the "Files to read on resume". Open more when they become necessary.
+- Rebuild the Todo list from the NAP's next actions.
+- Show the user: a 3-line summary of what you understood, the drift and re-verification results, the execution plan
+  starting from the first action, and the NAP's open questions. In plan mode, get approval.
 
-## 5. 실행한다
+## 5. Execute
 
-- 승인 후 첫 파일 쓰기 전에 재개 표시 명령을 실행한다. 다음 재개 때 이 NAP가 이미
-  이어받은 것임을 알 수 있다.
-- 다음 행동과 완료 기준이 모두 충족되면 완료 처리 명령으로 done 표시한다. 그 날짜 폴더에
-  살아 있는 NAP가 남지 않으면 폴더째 `next/archive/`로 옮겨진다.
-- 도중에 다시 세션을 끊어야 하면 작성 모드(`/handoff`)로 새 NAP를 쓴다. 새 NAP는 다음 번호로
-  생겨 previous로 연결되고, 검사를 통과하면 이전 NAP는 superseded가 된다.
+- After approval, run the mark resumed command before the first file write. That way, on the next resume, it is clear
+  that this NAP has already been picked up.
+- When the next actions and done criteria are all met, mark it done with the mark done command. If no live NAP remains
+  in that date folder, the whole folder is moved to `next/archive/`.
+- If the session has to be cut again midway, write a new NAP in write mode (`/handoff`). The new NAP gets the next
+  number and is linked through previous, and once it passes check, the previous NAP becomes superseded.
