@@ -50,7 +50,7 @@ corrected version, and move the wrong approach to "Do not".
 
 ## 5. Record
 
-1. Run the prepare command. It creates a **draft `next/yyyy-mm-dd/rN.md` (status: draft)** with the next number in
+1. Run the prepare command. It creates a **draft `handoff/yyyy-mm-dd/rN.md` (status: draft)** with the next number in
    today's date folder, machine fields filled in, and prints its path ("Draft created:"; Korean "초안 생성:") and frontmatter.
    Hand-written rN.md files count toward the numbering too. From here on, fill in this path.
    If it stops with "Nothing to hand off" ("인수인계할 변화 없음"), confirm with the user whether resume mode is the right
@@ -78,12 +78,12 @@ corrected version, and move the wrong approach to "Do not".
 1. Run the check command. Fix every error; judge each warning one by one and either fix it or leave the reason for
    keeping it in the report. Re-run after fixing. When it passes, the script promotes it `draft → active` and changes
    the previous NAP to superseded — from this point the NAP on disk is valid as the handoff. If no live NAP remains in
-   the previous NAP's date folder, that folder is moved to `next/archive/` (the "archived:" item; Korean "보관:").
+   the previous NAP's date folder, that folder is moved to `handoff/archive/` (the "archived:" item; Korean "보관:").
 2. Do the cold read **only once**; skip it for a lite write (`lite`). Hand it to a read-only subagent that knows nothing
    of this conversation (`subagent_type: Explore`) with the instructions below. The result is kept short so that the
    main context does not grow.
 
-   > Read only `next/yyyy-mm-dd/rN.md` (replace with the actual path the prepare command printed). Only read the file; never modify it. Answer only with a list of
+   > Read only `handoff/yyyy-mm-dd/rN.md` (replace with the actual path the prepare command printed). Only read the file; never modify it. Answer only with a list of
    > at most 10 lines of problems that would keep someone from starting the 'first action' right away with this document
    > alone (undefined pronouns or terms, missing paths or commands, contradictory content, claims without evidence).
    > If there are no problems, answer only "none". You may answer in the document's language.

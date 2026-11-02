@@ -1,21 +1,21 @@
 #!/usr/bin/env python3
 """handoff 스킬 보조 스크립트. 표준 라이브러리만 쓴다 (python3 + git).
 
-작업지시서(NAP)는 next/yyyy-mm-dd/rN.md 다. archive 를 뺀 가장 최근 날짜 폴더의 가장 큰 번호가 "지금 할 일"이다.
+작업지시서(NAP)는 handoff/yyyy-mm-dd/rN.md 다. archive 를 뺀 가장 최근 날짜 폴더의 가장 큰 번호가 "지금 할 일"이다.
 frontmatter 없이 직접 쓴 rN.md 도 같은 번호 체계에 들어간다 (드리프트 판정만 못 한다).
 
 하위 명령
-  snapshot  현재 git·next/ 상태 요약. 스킬 로드 시 주입되므로 어떤 경우에도 exit 0.
+  snapshot  현재 git·handoff/ 상태 요약. 스킬 로드 시 주입되므로 어떤 경우에도 exit 0.
   prepare   오늘 날짜 폴더에 다음 번호 rN.md 초안(status draft) 생성·기계 필드 출력. 기존 파일은 건드리지 않는다.
             같은 브랜치의 활성 NAP 에 변화가 없으면 --force 없이는 멈춘다 (새 세션에서의 오발동 방지).
   check     NAP 검증: 구조·기록 상태 일치·경로·시크릿·맥락 의존 표현 (오류 시 exit 1).
             통과하면 draft → active 로 승격하고, previous 의 같은 브랜치 NAP 를 superseded 로 바꾼다.
-  drift     NAP 기록 시점과 현재 상태 비교 (드리프트 시 exit 1). next/ 만 바꾼 커밋은 드리프트가 아니다.
+  drift     NAP 기록 시점과 현재 상태 비교 (드리프트 시 exit 1). handoff/ 만 바꾼 커밋은 드리프트가 아니다.
   mark      NAP 상태 변경: resumed | done
 
 상태 전이: draft(prepare) → active(check 통과) → resumed(mark) → done(mark) | superseded(다음 NAP 의 check)
 어느 단계에서 세션이 끊겨도 디스크가 사실을 말하도록, 이전 NAP 의 상태는 새 NAP 가 검사를 통과할 때 바꾼다.
-날짜 폴더에 살아 있는(active·resumed) NAP 가 없어지면 폴더째 next/archive/ 로 옮긴다 (check·mark done 시점).
+날짜 폴더에 살아 있는(active·resumed) NAP 가 없어지면 폴더째 handoff/archive/ 로 옮긴다 (check·mark done 시점).
 """
 from __future__ import annotations
 
@@ -31,10 +31,10 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-NEXT, ARC = "next", "archive"
+HANDOFF, ARC = "handoff", "archive"
 DATE_DIR = re.compile(r"\d{4}-\d{2}-\d{2}$")
 NAP_NAME = re.compile(r"r(\d+)\.md$")
-MANIFEST_IGNORE = f"/{NEXT}/**/.*.files"  # 해시 기록 파일만 로컬 무시 — 작업지시서(rN.md)는 사용자가 커밋한다
+MANIFEST_IGNORE = f"/{HANDOFF}/**/.*.files"  # 해시 기록 파일만 로컬 무시 — 작업지시서(rN.md)는 사용자가 커밋한다
 LIVE = ("active", "resumed")  # 재개 대상
 DRAFT = "draft"  # prepare 가 만든 초안 — check 통과 시 active 로 승격
 MANIFEST_VERSION = 2  # 해시 방식이 바뀌면 올린다. v2: 텍스트 파일 줄바꿈을 LF 로 정규화한 뒤 해시
@@ -43,22 +43,22 @@ TEMPLATES = {lang: Path(__file__).resolve().parent.parent / "assets" / f"nap-tem
 UI_LANG = "ko"  # main() 에서 --lang → HANDOFF_LANG → 로캘 순으로 정한다
 DESCRIPTION_EN = """handoff skill helper script. Standard library only (python3 + git).
 
-A handoff doc (NAP) is next/yyyy-mm-dd/rN.md. The highest number in the most recent date folder (archive excluded)
+A handoff doc (NAP) is handoff/yyyy-mm-dd/rN.md. The highest number in the most recent date folder (archive excluded)
 is "what to do now". Hand-written rN.md files without frontmatter join the same numbering (drift cannot be checked).
 
 Subcommands
-  snapshot  Summary of the current git and next/ state. Injected at skill load, so it always exits 0.
+  snapshot  Summary of the current git and handoff/ state. Injected at skill load, so it always exits 0.
   prepare   Create the next rN.md draft (status draft) in today's date folder and print the machine fields.
             Existing files are left untouched. Stops without --force if the active NAP on the same branch has
             no changes (guards against misfiring in a new session).
   check     Validate a NAP: structure, recorded state match, paths, secrets, context-dependent phrases (exit 1 on errors).
             On pass, promotes draft → active and marks the previous same-branch NAP superseded.
-  drift     Compare the NAP's recorded state with now (exit 1 on drift). Commits that only touch next/ are not drift.
+  drift     Compare the NAP's recorded state with now (exit 1 on drift). Commits that only touch handoff/ are not drift.
   mark      Change NAP status: resumed | done
 
 Status flow: draft (prepare) → active (check passed) → resumed (mark) → done (mark) | superseded (next NAP's check)
 The previous NAP's status changes only when the new NAP passes check, so the disk tells the truth wherever a session stops.
-When a date folder has no live (active, resumed) NAP left, the whole folder moves to next/archive/ (at check or mark done).
+When a date folder has no live (active, resumed) NAP left, the whole folder moves to handoff/archive/ (at check or mark done).
 """
 ENUMS = {
     "kind": {"implementation", "research"},
@@ -174,7 +174,7 @@ def status_v2(root):
 
     [이유] 이 PC 는 git 하위 프로세스 1회에 1~2초가 걸려(2026-09-29 실측) 호출 수가 곧 스킬 로드 지연이다.
            rev-parse·symbolic-ref·status 3회를 1회로 합친다.
-    항목은 (XY, 경로). XY 는 v1 표기(변경 없음 = 공백)로 맞추고, next/ 아래는 제외한다.
+    항목은 (XY, 경로). XY 는 v1 표기(변경 없음 = 공백)로 맞추고, handoff/ 아래는 제외한다.
     """
     raw = git(root, "status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all", "--no-renames")
     if raw is None:
@@ -207,7 +207,7 @@ def status_v2(root):
                 continue
         except IndexError:
             continue
-        if path == NEXT or path.startswith(NEXT + "/"):
+        if path == HANDOFF or path.startswith(HANDOFF + "/"):
             continue
         entries.append((xy.replace(".", " "), path))
     return dict(oid="" if oid == "(initial)" else oid,
@@ -216,7 +216,7 @@ def status_v2(root):
 
 def diff_numstat(root, base):
     """base 대비 달라진 추적 파일 → {경로: (추가 행, 삭제 행)}. 바이너리는 (None, None). 실패하면 None."""
-    raw = git(root, "diff", "--numstat", "-z", "--no-renames", base, "--", ".", f":(exclude){NEXT}")
+    raw = git(root, "diff", "--numstat", "-z", "--no-renames", base, "--", ".", f":(exclude){HANDOFF}")
     if raw is None:
         return None
     out = {}
@@ -341,7 +341,7 @@ def state(root, is_git):
 
 
 def is_ignored(root):
-    return git(root, "check-ignore", "-q", "--no-index", f"{NEXT}/0000-00-00/.r1.files") is not None
+    return git(root, "check-ignore", "-q", "--no-index", f"{HANDOFF}/0000-00-00/.r1.files") is not None
 
 
 # ---------------------------------------------------------------- frontmatter
@@ -384,7 +384,7 @@ def read_nap(path):
 
 
 def nap_list(nd):
-    """next/ 바로 아래 날짜 폴더의 rN.md 를 (날짜, 번호) 순으로. archive 는 제외."""
+    """handoff/ 바로 아래 날짜 폴더의 rN.md 를 (날짜, 번호) 순으로. archive 는 제외."""
     found = []
     if nd.is_dir():
         for d in nd.iterdir():
@@ -397,10 +397,10 @@ def nap_list(nd):
 def nap_path(arg, root):
     """인자로 받은 경로, 없으면 최신 작업지시서. 작업지시서가 하나도 없으면 None."""
     if not arg:
-        naps = nap_list(root / NEXT)
+        naps = nap_list(root / HANDOFF)
         return naps[-1] if naps else None
     p = Path(arg).expanduser()
-    # 상대 경로는 --root 기준이 먼저다 — next/<날짜>/rN.md 는 저장소마다 겹쳐서, cwd 기준으로 풀면 다른 저장소의 파일을 고친다
+    # 상대 경로는 --root 기준이 먼저다 — handoff/<날짜>/rN.md 는 저장소마다 겹쳐서, cwd 기준으로 풀면 다른 저장소의 파일을 고친다
     if p.is_absolute() or (root / p).exists():
         return root / p
     return p if p.exists() else root / p
@@ -409,11 +409,11 @@ def nap_path(arg, root):
 # ---------------------------------------------------------------- 보관
 
 def sweep(root, folder):
-    """날짜 폴더에 살아 있는(active·resumed) NAP 가 없으면 폴더째 next/archive/ 로 옮긴다. 옮긴 경로, 아니면 None.
+    """날짜 폴더에 살아 있는(active·resumed) NAP 가 없으면 폴더째 handoff/archive/ 로 옮긴다. 옮긴 경로, 아니면 None.
 
     draft(끊긴 초안)와 frontmatter 없이 직접 쓴 rN.md 는 살아 있는 것으로 세지 않는다.
     """
-    nd, folder = root / NEXT, Path(folder)
+    nd, folder = root / HANDOFF, Path(folder)
     if not folder.is_dir() or folder.parent.resolve() != nd.resolve() or not DATE_DIR.match(folder.name):
         return None
     if any(read_nap(f)[0].get("status") in LIVE for f in folder.iterdir() if NAP_NAME.match(f.name)):
@@ -469,9 +469,9 @@ def drift(root, fm, s, nap=None):
             if full != s["head_full"]:
                 if git(root, "merge-base", "--is-ancestor", full, "HEAD") is not None:
                     n = git(root, "rev-list", "--count", f"{full}..HEAD") or "?"
-                    if git(root, "diff", "--name-only", full, "HEAD", "--", ".", f":(exclude){NEXT}") == "":
-                        notes.append(tr(f"기록 이후 커밋 {n}개는 {NEXT}/ 만 바꿈 (작업지시서 커밋)",
-                                        f"the {n} commit(s) since recording only touched {NEXT}/ (handoff doc commits)"))
+                    if git(root, "diff", "--name-only", full, "HEAD", "--", ".", f":(exclude){HANDOFF}") == "":
+                        notes.append(tr(f"기록 이후 커밋 {n}개는 {HANDOFF}/ 만 바꿈 (작업지시서 커밋)",
+                                        f"the {n} commit(s) since recording only touched {HANDOFF}/ (handoff doc commits)"))
                     else:
                         issues.append(tr(f"새 커밋 {n}개", f"{n} new commit(s)"))
                         details.append((tr("기록 이후 커밋", "Commits since recording"),
@@ -509,9 +509,9 @@ def drift(root, fm, s, nap=None):
 
 # ---------------------------------------------------------------- snapshot
 
-def next_lines(root, is_git, s):
-    out = ["### next/"]
-    nd = root / NEXT
+def handoff_lines(root, is_git, s):
+    out = [f"### {HANDOFF}/"]
+    nd = root / HANDOFF
     if is_git:
         out.append(tr("- 해시 기록 파일 로컬 무시: ", "- Manifest files ignored locally: ")
                    + (tr("됨", "yes") if is_ignored(root)
@@ -561,7 +561,7 @@ def next_lines(root, is_git, s):
     if (nd / ARC).is_dir():
         n = sum(1 for p in (nd / ARC).iterdir() if p.is_dir())
         if n:
-            out.append(tr(f"- 보관: 날짜 폴더 {n}개 ({NEXT}/{ARC}/)", f"- Archive: {n} date folder(s) ({NEXT}/{ARC}/)"))
+            out.append(tr(f"- 보관: 날짜 폴더 {n}개 ({HANDOFF}/{ARC}/)", f"- Archive: {n} date folder(s) ({HANDOFF}/{ARC}/)"))
     return out
 
 
@@ -596,7 +596,7 @@ def cmd_snapshot(a):
                 out.append(tr("- 최근 커밋:", "- Recent commits:"))
                 out += [f"  {x}" for x in log.splitlines()]
             out.append(f"- worktree: {s['worktree']}")
-        out += next_lines(root, is_git, s)
+        out += handoff_lines(root, is_git, s)
         print("\n".join(out))
     except Exception as e:  # 스냅샷 실패가 스킬 전체를 막지 않도록
         print(tr(f"(스냅샷 수집 실패: {type(e).__name__}: {e}) — git status로 직접 확인할 것",
@@ -608,9 +608,9 @@ def cmd_snapshot(a):
 
 def cmd_prepare(a):
     root, is_git = resolve_root(a.root)
-    nd = root / NEXT
+    nd = root / HANDOFF
     nd.mkdir(parents=True, exist_ok=True)
-    msgs = [f"- next/: {nd}"]
+    msgs = [f"- {HANDOFF}/: {nd}"]
     if is_git:
         if is_ignored(root):
             msgs.append(tr("- 해시 기록 파일 로컬 무시: 이미 됨", "- Manifest files ignored locally: already"))
@@ -794,7 +794,7 @@ def cmd_check(a):
     root, is_git = resolve_root(a.root)
     path = nap_path(a.file, root)
     if path is None or not path.exists():
-        print(tr(f"NAP 없음: {path or NEXT + '/ 에 작업지시서가 없음'}", f"No NAP: {path or NEXT + '/ has no handoff doc'}"))
+        print(tr(f"NAP 없음: {path or HANDOFF + '/ 에 작업지시서가 없음'}", f"No NAP: {path or HANDOFF + '/ has no handoff doc'}"))
         return 1
     fm, body, text, m = read_nap(path)
     errors, warns = [], []
@@ -946,9 +946,9 @@ def cmd_check(a):
             warns.append(tr(f"[경로] {no}행: `{c}` 없음 — 새로 만들 파일이 아니면 경로 확인",
                             f"[path] line {no}: `{c}` not found — check the path unless it is a file still to be created"))
 
-    # 통과한 next/ 의 작업지시서는 여기서 비로소 "살아 있는" NAP 가 된다: draft → active, 이전 NAP → superseded
+    # 통과한 handoff/ 의 작업지시서는 여기서 비로소 "살아 있는" NAP 가 된다: draft → active, 이전 NAP → superseded
     promoted = []
-    if not errors and path.resolve() in {p.resolve() for p in nap_list(root / NEXT)}:
+    if not errors and path.resolve() in {p.resolve() for p in nap_list(root / HANDOFF)}:
         if fm.get("status") == DRAFT:
             save(path, set_fm(text, "status", "active"))
             promoted.append("status draft → active")
@@ -983,7 +983,7 @@ def cmd_drift(a):
     root, is_git = resolve_root(a.root)
     path = nap_path(a.file, root)
     if path is None or not path.exists():
-        print(tr(f"NAP 없음: {path or NEXT + '/ 에 작업지시서가 없음'}", f"No NAP: {path or NEXT + '/ has no handoff doc'}"))
+        print(tr(f"NAP 없음: {path or HANDOFF + '/ 에 작업지시서가 없음'}", f"No NAP: {path or HANDOFF + '/ has no handoff doc'}"))
         return 2
     fm = read_nap(path)[0]
     s = state(root, is_git)
@@ -1002,7 +1002,7 @@ def cmd_mark(a):
     root, _ = resolve_root(a.root)
     path = nap_path(a.file, root)
     if path is None or not path.exists():
-        print(tr(f"NAP 없음: {path or NEXT + '/ 에 작업지시서가 없음'}", f"No NAP: {path or NEXT + '/ has no handoff doc'}"))
+        print(tr(f"NAP 없음: {path or HANDOFF + '/ 에 작업지시서가 없음'}", f"No NAP: {path or HANDOFF + '/ has no handoff doc'}"))
         return 1
     fm, _, text, _ = read_nap(path)
     if fm.get("status") == DRAFT:

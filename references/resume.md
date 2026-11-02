@@ -7,12 +7,12 @@ Steps 1–4 are read-only. Running them in plan mode is recommended.
 
 ## 1. Choose the NAP to continue
 
-Look at the `next/` entry in the snapshot at the top of SKILL.md.
+Look at the `handoff/` entry in the snapshot at the top of SKILL.md.
 
 If the NAP to continue is not the latest handoff doc, pass its path to the drift, mark resumed and mark done commands
 from here on (drift as a positional argument, mark with `--file`).
 
-- If the arguments contain a path, use that NAP. If the file is inside `next/archive/`, the work is finished, so tell
+- If the arguments contain a path, use that NAP. If the file is inside `handoff/archive/`, the work is finished, so tell
   the user that and ask what to do.
 - If the latest handoff doc is an active (active or resumed) NAP on the current branch, use it.
 - If the latest handoff doc is a `draft`, the previous session's handoff was cut off midway. Use the draft only as a
@@ -55,6 +55,6 @@ Look at the snapshot's drift verdict.
 - After approval, run the mark resumed command before the first file write. That way, on the next resume, it is clear
   that this NAP has already been picked up.
 - When the next actions and done criteria are all met, mark it done with the mark done command. If no live NAP remains
-  in that date folder, the whole folder is moved to `next/archive/`.
+  in that date folder, the whole folder is moved to `handoff/archive/`.
 - If the session has to be cut again midway, write a new NAP in write mode (`/handoff`). The new NAP gets the next
   number and is linked through previous, and once it passes check, the previous NAP becomes superseded.

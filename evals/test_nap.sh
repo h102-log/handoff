@@ -19,7 +19,7 @@ hasnt(){ grep -qF -- "$2" <<<"$1" && { bad "$3"; echo "$1" | sed 's/^/        | 
 # 파일 안 문자열 치환 / 마지막 줄 삭제 — GNU sed -i 는 macOS(BSD sed)에서 실패하므로 python3 로
 sub()      { python3 -c "import sys;p,a,b=sys.argv[1:];t=open(p,encoding='utf-8').read();open(p,'w',encoding='utf-8',newline='').write(t.replace(a,b))" "$1" "$2" "$3"; }
 droplast() { python3 -c "import sys;p=sys.argv[1];L=open(p,encoding='utf-8').read().splitlines(True);open(p,'w',encoding='utf-8',newline='').write(''.join(L[:-1]))" "$1"; }
-# prepare 출력에서 새 초안 경로(next/yyyy-mm-dd/rN.md)를 꺼낸다
+# prepare 출력에서 새 초안 경로(handoff/yyyy-mm-dd/rN.md)를 꺼낸다
 napof() { sed -n 's/^- 초안 생성: \([^ ]*\) .*/\1/p' "$1" | tr -d '\r'; }
 napof_en() { sed -n 's/^- Draft created: \([^ ]*\) .*/\1/p' "$1" | tr -d '\r'; }
 # 파일에서 한글이 남은 줄 — 경로 토큰은 빼고 본다 (임시 폴더·사용자 이름에 한글이 있을 수 있다)
@@ -46,7 +46,7 @@ echo "[A] 작성: payhook (미커밋 + .env 함정)"
 bash "$FX/setup_payhook.sh" "$T/payhook" >/dev/null
 python3 "$NAP" prepare --root "$T/payhook" --session sess-A > "$T/prep.txt"
 N="$(napof "$T/prep.txt")"
-[ "$N" = "next/$TODAY/r1.md" ] && ok "첫 초안은 오늘 날짜 폴더의 r1" || bad "첫 초안은 오늘 날짜 폴더의 r1 (실제: $N)"
+[ "$N" = "handoff/$TODAY/r1.md" ] && ok "첫 초안은 오늘 날짜 폴더의 r1" || bad "첫 초안은 오늘 날짜 폴더의 r1 (실제: $N)"
 has "$(cat "$T/payhook/$N")" "status: draft" "prepare 가 draft 초안을 디스크에 남김"
 out=$(python3 "$NAP" check --root "$T/payhook"); has "$out" "[미작성]" "초안 그대로는 검사 실패(자리표시자)"; hasnt "$out" "승격" "실패하면 승격하지 않음"
 cp "$HERE/golden/nap_payhook.md" "$T/payhook/$N"; apply_fields "$T/prep.txt" "$T/payhook/$N"
@@ -54,7 +54,7 @@ out=$(python3 "$NAP" check --root "$T/payhook"); has "$out" "결과: 통과" "�
 has "$out" "승격: status draft → active" "검사 통과 시 draft → active"; has "$(cat "$T/payhook/$N")" "status: active" "승격이 파일에 반영"
 st=$(cd "$T/payhook" && git status --porcelain -uall)
 has "$st" "?? $N" "작업지시서는 git status 에 보임 (커밋 대상)"; hasnt "$st" ".r1.files" "해시 기록 파일은 로컬 무시"
-[ -f "$T/payhook/next/$TODAY/.r1.files" ] && ok "매니페스트 생성" || bad "매니페스트 생성"
+[ -f "$T/payhook/handoff/$TODAY/.r1.files" ] && ok "매니페스트 생성" || bad "매니페스트 생성"
 cp "$T/payhook/$N" "$T/leak.md"
 sub "$T/leak.md" '값은 기록하지 않음' 'whsec_live_9Fh2kQ7xLm3Pz8RtVb'
 out=$(python3 "$NAP" check "$T/leak.md" --root "$T/payhook"); has "$out" "[시크릿]" ".env 값 유출을 오류로 잡음"
@@ -65,16 +65,16 @@ echo "# edit" >> "$T/payhook/src/payhook/backoff.py"
 out=$(python3 "$NAP" check --root "$T/payhook"); has "$out" "worktree 불일치" "작성 후 변경을 오류로 잡음"
 python3 "$NAP" prepare --refresh --root "$T/payhook" >/dev/null
 out=$(python3 "$NAP" check --root "$T/payhook"); has "$out" "결과: 통과" "--refresh 후 통과 (새 번호 없이 제자리 갱신)"
-[ "$(ls "$T/payhook/next/$TODAY" | grep -c '^r[0-9]*\.md$')" = 1 ] && ok "--refresh는 새 번호를 만들지 않음" || bad "--refresh는 새 번호를 만들지 않음"
+[ "$(ls "$T/payhook/handoff/$TODAY" | grep -c '^r[0-9]*\.md$')" = 1 ] && ok "--refresh는 새 번호를 만들지 않음" || bad "--refresh는 새 번호를 만들지 않음"
 git -C "$T/payhook" checkout -q -- . 2>/dev/null; droplast "$T/payhook/src/payhook/backoff.py"
 python3 "$NAP" prepare --refresh --root "$T/payhook" >/dev/null
 
 echo "[C] 재개: 드리프트"
 cp -r "$T/payhook" "$T/benign"; git -C "$T/benign" add src tests; git -C "$T/benign" commit -qm "wip"
 out=$(python3 "$NAP" drift --root "$T/benign"); has "$out" "작업 내용은 기록 시점과 동일" "WIP를 그대로 커밋만 한 경우를 구분"
-cp -r "$T/payhook" "$T/naponly"; git -C "$T/naponly" add next; git -C "$T/naponly" commit -qm "nap"
-out=$(python3 "$NAP" drift --root "$T/naponly"); has "$out" "판정: CLEAN" "next/ 만 바꾼 커밋은 드리프트가 아님"
-has "$out" "next/ 만 바꿈" "작업지시서 커밋이 있었다는 사실은 알림"
+cp -r "$T/payhook" "$T/naponly"; git -C "$T/naponly" add handoff; git -C "$T/naponly" commit -qm "nap"
+out=$(python3 "$NAP" drift --root "$T/naponly"); has "$out" "판정: CLEAN" "handoff/ 만 바꾼 커밋은 드리프트가 아님"
+has "$out" "handoff/ 만 바꿈" "작업지시서 커밋이 있었다는 사실은 알림"
 bash "$FX/drift_payhook.sh" "$T/payhook" >/dev/null
 out=$(python3 "$NAP" snapshot --root "$T/payhook"); has "$out" "드리프트: DRIFT" "스냅샷이 드리프트를 표시"
 out=$(python3 "$NAP" drift --root "$T/payhook"); rc=$?
@@ -89,25 +89,25 @@ out=$(python3 "$NAP" check --root "$T/csvtool"); has "$out" "통과" "골든 NAP
 has "$out" "sample_utf8_bom.csv" "새로 만들 파일은 경고로만 표시"
 
 echo "[D] 브랜치 전환·폴더째 보관"
-# stash 는 -u 없이 — 커밋 전 작업지시서(next/ 미추적)까지 쓸어 가지 않게
+# stash 는 -u 없이 — 커밋 전 작업지시서(handoff/ 미추적)까지 쓸어 가지 않게
 R="$T/csvtool"; git -C "$R" stash -q; git -C "$R" switch -qc feature/other
 python3 "$NAP" prepare --root "$R" > "$T/prep2.txt"; N2="$(napof "$T/prep2.txt")"
 has "$(cat "$T/prep2.txt")" "상태를 유지함" "다른 브랜치 NAP는 superseded로 덮지 않음"
-[ "$N2" = "next/$TODAY/r2.md" ] && ok "같은 날 두 번째 NAP는 r2" || bad "같은 날 두 번째 NAP는 r2 (실제: $N2)"
+[ "$N2" = "handoff/$TODAY/r2.md" ] && ok "같은 날 두 번째 NAP는 r2" || bad "같은 날 두 번째 NAP는 r2 (실제: $N2)"
 cp "$HERE/golden/nap_csvtool.md" "$R/$N2"; apply_fields "$T/prep2.txt" "$R/$N2"
 out=$(python3 "$NAP" check --root "$R"); has "$out" "결과: 통과" "다른 브랜치에서 새 NAP 검사 통과"
 has "$(cat "$R/$NB")" "status: active" "다른 브랜치의 이전 NAP status 유지"
 git -C "$R" switch -q fix/korean-csv-encoding; git -C "$R" stash pop -q
 out=$(python3 "$NAP" snapshot --root "$R"); has "$out" "현재 브랜치(fix/korean-csv-encoding)의 다른 활성 NAP: $NB" "최신이 아닌 현재 브랜치의 활성 NAP를 안내"
 out=$(python3 "$NAP" drift "$NB" --root "$R"); has "$out" "판정: CLEAN" "경로로 지정한 NAP의 드리프트 없음"
-# cwd 를 같은 상대 경로(next/<오늘>/r1.md)가 있는 다른 저장소(payhook)에 두고 실행 — --root 기준으로 풀어야 한다
+# cwd 를 같은 상대 경로(handoff/<오늘>/r1.md)가 있는 다른 저장소(payhook)에 두고 실행 — --root 기준으로 풀어야 한다
 (cd "$T/payhook" && python3 "$NAP" mark resumed --file "$NB" --root "$R" >/dev/null); has "$(cat "$R/$NB")" "status: resumed" "mark resumed"
-has "$(cat "$T/payhook/next/$TODAY/r1.md")" "status: active" "상대 경로는 cwd 가 아니라 --root 기준 (다른 저장소 파일 불변)"
+has "$(cat "$T/payhook/handoff/$TODAY/r1.md")" "status: active" "상대 경로는 cwd 가 아니라 --root 기준 (다른 저장소 파일 불변)"
 out=$(python3 "$NAP" mark done --file "$NB" --root "$R")
 hasnt "$out" "보관:" "살아 있는 NAP(r2)가 남으면 폴더를 옮기지 않음"
 out=$(python3 "$NAP" mark done --file "$N2" --root "$R"); has "$out" "보관: " "마지막 활성 NAP가 끝나면 보관 안내"
-[ ! -e "$R/next/$TODAY" ] && [ -f "$R/next/archive/$TODAY/r2.md" ] && [ -f "$R/next/archive/$TODAY/.r1.files" ] \
-  && ok "날짜 폴더째 next/archive/ 로 (해시 기록 파일 포함)" || bad "날짜 폴더째 next/archive/ 로 (해시 기록 파일 포함)"
+[ ! -e "$R/handoff/$TODAY" ] && [ -f "$R/handoff/archive/$TODAY/r2.md" ] && [ -f "$R/handoff/archive/$TODAY/.r1.files" ] \
+  && ok "날짜 폴더째 handoff/archive/ 로 (해시 기록 파일 포함)" || bad "날짜 폴더째 handoff/archive/ 로 (해시 기록 파일 포함)"
 out=$(python3 "$NAP" snapshot --root "$R"); has "$out" "작업지시서: 없음" "보관 후 남은 작업지시서 없음"
 
 echo "[E] 비정상 환경"
@@ -127,23 +127,23 @@ has "$(cat "$P/$prev")" "status: superseded" "이전 NAP 파일에 반영"
 out=$(python3 "$NAP" prepare --root "$P"); rc=$?
 has "$out" "인수인계할 변화 없음" "변화 없는 활성 NAP 위에 prepare → 가드"; [ $rc -eq 1 ] && ok "가드 exit 1" || bad "가드 exit 1"
 has "$(cat "$P/$N3")" "status: active" "가드가 걸리면 기존 NAP 를 건드리지 않음"
-[ ! -e "$P/next/$TODAY/r3.md" ] && ok "가드가 걸리면 새 번호를 만들지 않음" || bad "가드가 걸리면 새 번호를 만들지 않음"
+[ ! -e "$P/handoff/$TODAY/r3.md" ] && ok "가드가 걸리면 새 번호를 만들지 않음" || bad "가드가 걸리면 새 번호를 만들지 않음"
 python3 "$NAP" prepare --force --root "$P" >/dev/null && ok "--force 로 진행" || bad "--force 로 진행"
 out=$(python3 "$NAP" prepare --root "$P"); has "$out" "previous: $N3" "끊긴 초안(draft)은 건너뛰고 그 previous 를 이음"
 
 echo "[G] 직접 쓴 작업지시서(frontmatter 없음)와 공존"
-H="$T/hand"; bash "$FX/setup_payhook.sh" "$H" >/dev/null; mkdir -p "$H/next/$TODAY"
-printf '# 손으로 쓴 지시서 r1\n' > "$H/next/$TODAY/r1.md"; printf '# 손으로 쓴 지시서 r2\n' > "$H/next/$TODAY/r2.md"
+H="$T/hand"; bash "$FX/setup_payhook.sh" "$H" >/dev/null; mkdir -p "$H/handoff/$TODAY"
+printf '# 손으로 쓴 지시서 r1\n' > "$H/handoff/$TODAY/r1.md"; printf '# 손으로 쓴 지시서 r2\n' > "$H/handoff/$TODAY/r2.md"
 out=$(python3 "$NAP" snapshot --root "$H"); has "$out" "frontmatter 없음" "직접 쓴 문서를 최신 작업지시서로 인식"
 has "$out" "손으로 쓴 지시서 r2" "직접 쓴 문서는 제목 줄로 표시"
-out=$(python3 "$NAP" prepare --root "$H"); has "$out" "초안 생성: next/$TODAY/r3.md" "직접 쓴 r 다음 번호로 이어감"
-has "$out" "previous: next/$TODAY/r2.md" "직접 쓴 최신 문서를 previous 로 연결"
-H2="$T/hand2"; bash "$FX/setup_payhook.sh" "$H2" >/dev/null; mkdir -p "$H2/next/2000-01-01"
-printf '# 옛 지시서\n' > "$H2/next/2000-01-01/r1.md"
+out=$(python3 "$NAP" prepare --root "$H"); has "$out" "초안 생성: handoff/$TODAY/r3.md" "직접 쓴 r 다음 번호로 이어감"
+has "$out" "previous: handoff/$TODAY/r2.md" "직접 쓴 최신 문서를 previous 로 연결"
+H2="$T/hand2"; bash "$FX/setup_payhook.sh" "$H2" >/dev/null; mkdir -p "$H2/handoff/2000-01-01"
+printf '# 옛 지시서\n' > "$H2/handoff/2000-01-01/r1.md"
 python3 "$NAP" prepare --root "$H2" > "$T/prep7.txt"; N7="$(napof "$T/prep7.txt")"
 cp "$HERE/golden/nap_payhook.md" "$H2/$N7"; apply_fields "$T/prep7.txt" "$H2/$N7"
-out=$(python3 "$NAP" check --root "$H2"); has "$out" "보관: next/archive/2000-01-01" "살아 있는 NAP 없는 이전 날짜 폴더는 검사 통과 시 보관"
-[ ! -e "$H2/next/2000-01-01" ] && [ -f "$H2/next/archive/2000-01-01/r1.md" ] && [ -f "$H2/$N7" ] \
+out=$(python3 "$NAP" check --root "$H2"); has "$out" "보관: handoff/archive/2000-01-01" "살아 있는 NAP 없는 이전 날짜 폴더는 검사 통과 시 보관"
+[ ! -e "$H2/handoff/2000-01-01" ] && [ -f "$H2/handoff/archive/2000-01-01/r1.md" ] && [ -f "$H2/$N7" ] \
   && ok "옛 폴더만 옮기고 새 NAP는 제자리" || bad "옛 폴더만 옮기고 새 NAP는 제자리"
 
 echo "[H] 영어: payhook (--lang en)"
@@ -151,7 +151,7 @@ echo "[H] 영어: payhook (--lang en)"
 E="$T/en"; EN="$T/en.txt"; bash "$FX/setup_payhook.sh" "$E" >/dev/null
 python3 "$NAP" prepare --lang en --root "$E" --session sess-H > "$T/prepH.txt"; NE="$(napof_en "$T/prepH.txt")"
 cat "$T/prepH.txt" "$E/$NE" > "$EN"
-[ "$NE" = "next/$TODAY/r1.md" ] && ok "영어 초안도 오늘 날짜 폴더의 r1" || bad "영어 초안도 오늘 날짜 폴더의 r1 (실제: $NE)"
+[ "$NE" = "handoff/$TODAY/r1.md" ] && ok "영어 초안도 오늘 날짜 폴더의 r1" || bad "영어 초안도 오늘 날짜 폴더의 r1 (실제: $NE)"
 has "$(cat "$E/$NE")" "## 0. TL;DR" "영어 초안에 TL;DR 섹션"; has "$(cat "$E/$NE")" "▶ First action" "영어 초안은 영어 템플릿"
 out=$(python3 "$NAP" check --lang en --root "$E"); echo "$out" >> "$EN"
 has "$out" "[unfilled]" "영어 초안 그대로는 검사 실패(자리표시자)"; hasnt "$out" "Promoted" "실패하면 승격하지 않음 (en)"
@@ -174,7 +174,7 @@ has "$out" "newly changed  src/payhook/handler.py" "인수인계 이후 바뀐 �
 out=$(python3 "$NAP" snapshot --lang en --root "$E"); echo "$out" >> "$EN"; has "$out" "- Drift: DRIFT" "스냅샷이 드리프트를 표시 (en)"
 out=$(python3 "$NAP" mark resumed --lang en --root "$E"); echo "$out" >> "$EN"; has "$out" "Status changed: $NE → resumed" "mark resumed (en)"
 out=$(python3 "$NAP" mark done --lang en --root "$E"); echo "$out" >> "$EN"; has "$out" "Status changed: $NE → done" "mark done (en)"
-has "$out" "Archived: no live NAP left in the date folder; moved to next/archive/$TODAY" "마지막 활성 NAP가 끝나면 보관 안내 (en)"
+has "$out" "Archived: no live NAP left in the date folder; moved to handoff/archive/$TODAY" "마지막 활성 NAP가 끝나면 보관 안내 (en)"
 [ -n "$(hangul "$T/prep.txt")" ] && ok "한글 검사 도우미가 한국어 출력은 잡음" || bad "한글 검사 도우미가 한국어 출력은 잡음"
 left="$(hangul "$EN")"
 [ -z "$left" ] && ok "영어 출력·초안에 한글 없음 (경로 제외)" || { bad "영어 출력·초안에 한글 없음 (경로 제외)"; echo "$left" | sed 's/^/        | /' | head -20; }
