@@ -33,53 +33,70 @@ This is what a NAP's TL;DR looks like (translated excerpt of `evals/golden/nap_p
 
 ## Results
 
-The same half-finished task was carried into a new session in four ways, 5 rounds each, with Claude Code
-(`claude -p`, Opus 5.5, effort xhigh):
+The same half-finished task was carried into a new session in four ways, 5 rounds each with Opus 5.5 and with
+Sonnet 5.5, using Claude Code (`claude -p`, effort xhigh) without the runner's `CLAUDE.md` or user settings (plugins,
+hooks):
 
 | Condition | Handoff doc (6 checks) | Resumed session (5 checks) | Cost per run |
 |---|---|---|---|
-| 1. No doc: a new session starts from the repository | — | 4.0 | $0.27 |
-| 2. `/compact`, then the same session continues | 5.0 | 4.2 | $0.77 |
-| 3. A handoff doc asked for in plain words, read by a new session | 5.4 | 4.0 | $0.81 |
-| 4. `/handoff`, then `/handoff resume` in a new session | **6.0** | **4.8** | $1.11 |
+| 1. No doc: a new session starts from the repository | — | 3.0 · 3.0 | $0.22 · $0.10 |
+| 2. `/compact`, then the same session continues | 5.0 · 4.4¹ | **4.6 · 4.8** | $0.68 · $0.29 |
+| 3. A handoff doc asked for in plain words, read by a new session | 5.0 · 5.0 | 4.0 · 4.4 | $0.73 · $0.29 |
+| 4. `/handoff`, then `/handoff resume` in a new session | **6.0 · 6.0** | 4.4 · 4.6 | $0.95 · $0.54 |
 
-Checks passed per round, averaged over 5 rounds. Cost is what Claude Code reported for all the calls in one run.
-
-| Check (rounds passed out of 5) | 1 | 2 | 3 | 4 |
-|---|---|---|---|---|
-| *Handoff doc* | | | | |
-| No `.env` secret copied | — | 5 | 5 | 5 |
-| Dead ends recorded (`tenacity`, synchronous `sleep`) | — | 5 | 5 | 5 |
-| Unverified Stripe claim marked as unverified | — | 5 | 5 | 5 |
-| First action names `backoff.py:<line>` and the test command | — | 0 | 2 | 5 |
-| Your note kept (cap first, full jitter) | — | 5 | 5 | 5 |
-| Open question kept (dead-letter vs. Slack) | — | 5 | 5 | 5 |
-| *Resumed session* | | | | |
-| Names the changes made outside the session (new commit, `handler.py`) | 5 | 5 | 5 | 5 |
-| Asks before going ahead | 5 | 5 | 5 | 5 |
-| Re-checks the Stripe claim | 0 | 5 | 1 | 5 |
-| Asks for a decision on `max_attempts` | 5¹ | 1 | 4 | 4 |
-| Leaves the working tree unchanged | 5 | 5 | 5 | 5 |
-
-¹ Without a doc it never learned of the Stripe claim. It asked where `max_attempts=5` comes from because the author's
-global `CLAUDE.md` tells Claude to ask the user where a value comes from when the reason is unknown.
+Each cell is Opus · Sonnet: checks passed per round, averaged over 5 rounds. Cost is what Claude Code reported for all
+the calls in one run.
 
 What the numbers say:
 
-- Conditions 2–4 kept the basics in every round: no secret was copied, the Stripe claim was marked as unverified, and
-  the dead ends, your note and the open question were recorded. In all four conditions, every resumed session named
-  the changes made outside the session, asked before going ahead and changed no files.
-- **First action.** The template and instructions ask for `file:line` and a command, and the NAP's first action had
-  both in every round. The `/compact` summary never gave a line number; a plain doc did in 2 rounds of 5.
-- **Unverified claims.** `/handoff resume` re-checks every ⚠️ item, and it re-checked the Stripe claim in every round.
-  A new session reading a plain doc did so once in 5, although the doc marked the claim as unverified. `/compact`
-  re-checked it every time too, but asked for a decision on `max_attempts` only once; otherwise it stopped at noting
-  that the value had no verified basis.
-- **Cost.** $1.11 per run, against $0.77–0.81 for conditions 2 and 3.
-- Not in the numbers: `/compact` leaves nothing in the repository. Its summary is gone after `/clear`, and nobody else
-  can read it.
-- In condition 4, in all 5 rounds, `check` passed, the drift check named the new commit and `handler.py`, and the NAP
-  stayed `active` until approval.
+- **The NAP passed all 6 checks in all 10 rounds, with both models.** The check that set it apart is the first
+  action. The docs from conditions 2 and 3 also named the file and the test command, but none of those 20 gave a line
+  number. For `/handoff`, the template and instructions ask for `file:line` and a command in the first action.
+- **Whether the unverified claim gets re-checked.** The docs from conditions 2–4 all marked the Stripe claim as
+  unverified¹, but how often it was actually re-checked afterwards differed. `/handoff resume` has a step that
+  re-checks ⚠️ items and did so in all 10 rounds; a new session reading a plain doc did so in 7 of 10. A session
+  starting without a doc had no way to know of the claim (0). `/compact` continues in the same session and brought it
+  up again in all 10.
+- **`/compact` scored slightly higher on resuming** (Opus 4.6 vs. 4.4, Sonnet 4.8 vs. 4.6). The difference came from
+  the `max_attempts` check². But `/compact` leaves nothing in the repository: its summary is gone after `/clear`, and
+  nobody else can read it.
+- **Cost.** `/handoff` costs the most: $0.95 per run with Opus and $0.54 with Sonnet, against $0.68–0.73 and $0.29
+  for conditions 2 and 3. `/handoff` run with Sonnet cost less than `/compact` run with Opus and still passed all 6
+  NAP checks.
+- Every condition kept the basics. The docs from conditions 2–4 copied no secret and recorded the dead ends, your
+  note and the open question. Every resumed session asked before going ahead and changed no files, and all but one
+  (Sonnet, `/compact`) named the changes made outside the session.
+- In condition 4, in all 10 rounds with both models, `check` passed, the drift check named the new commit and
+  `handler.py`, and the NAP stayed `active` until approval.
+- **The runner's setup matters.** In an earlier run with Opus and the author's setup loaded (global `CLAUDE.md`,
+  plugins), even the session with no doc asked where `max_attempts` comes from in all 5 rounds. That `CLAUDE.md` tells
+  Claude to ask where a value comes from when the reason is unknown. Without the setup it asked in none, so the runs
+  now leave the runner's setup out.
+
+| Check (rounds passed out of 5, Opus · Sonnet) | 1 | 2 | 3 | 4 |
+|---|---|---|---|---|
+| *Handoff doc* | | | | |
+| No `.env` secret copied | — | 5 · 5 | 5 · 5 | 5 · 5 |
+| Dead ends recorded (`tenacity`, synchronous `sleep`) | — | 5 · 5 | 5 · 5 | 5 · 5 |
+| Unverified Stripe claim marked as unverified | — | 5 · 2¹ | 5 · 5 | 5 · 5 |
+| First action names `backoff.py:<line>` and the test command | — | 0 · 0 | 0 · 0 | 5 · 5 |
+| Your note kept (cap first, full jitter) | — | 5 · 5 | 5 · 5 | 5 · 5 |
+| Open question kept (dead-letter vs. Slack) | — | 5 · 5 | 5 · 5 | 5 · 5 |
+| *Resumed session* | | | | |
+| Names the changes made outside the session (new commit, `handler.py`) | 5 · 5 | 5 · 4 | 5 · 5 | 5 · 5 |
+| Asks before going ahead | 5 · 5 | 5 · 5 | 5 · 5 | 5 · 5 |
+| Re-checks the Stripe claim | 0 · 0 | 5 · 5 | 3 · 4 | 5 · 5 |
+| Asks for a decision on `max_attempts`² | 0 · 0 | 3 · 5 | 2 · 3 | 2 · 3 |
+| Leaves the working tree unchanged | 5 · 5 | 5 · 5 | 5 · 5 | 5 · 5 |
+
+¹ The 3 misses wrote the compaction summary in English and marked the Stripe claim `Unverified`. The grader's list of
+"unverified" wordings is Korean only, so it didn't count them; by content, all 5 marked it. Counted by content,
+Sonnet's doc average is 5.0.
+
+² The strictest check: `max_attempts`, the claim its value rests on, and a question have to appear on one line (or
+under a heading with the question). The 5 misses in condition 4 also asked about the defaults, but that line had
+neither the name `max_attempts` nor a basis wording the grader knows. The 2 misses in condition 2 stopped at noting
+the value had no verified basis; of the 5 misses in condition 3, one only listed it among decisions still pending.
 
 **Scenario** ([`evals/fixtures/`](evals/fixtures)): a small Python webhook service, midway through replacing a fixed
 60-second retry interval with exponential backoff: two commits, uncommitted edits, and one test failing because the
@@ -93,9 +110,8 @@ progress is committed and `handler.py` is edited outside the session.
 `selftest` confirms that a free-form doc and reply with the same content get full marks. In condition 2, the
 compaction summary is graded as the handoff doc.
 
-**Limits**: one scenario, in Korean, 5 rounds. Measured on 2026-11-02 with Claude Code 2.1.316 on Windows, with the
-author's setup (global `CLAUDE.md`, plugins) loaded the same way in every condition. That `CLAUDE.md` tells Claude to
-ask when unsure, which may have raised conditions 1–3 on the "asks" checks.
+**Limits**: one scenario, in Korean, 5 rounds per model. Measured on 2026-11-02 with Claude Code 2.1.316 on Windows.
+Grading is by keywords, so the same content in other words is missed (¹, ²).
 
 ## How it works
 
@@ -220,9 +236,10 @@ python3 evals/grade_ab.py selftest   # the grader used for Results, no model
 ```
 
 `evals/run_4way_ab_test.sh` reproduces [Results](#results). It uses the claude CLI to compare the four approaches on
-the Korean-language scenario, calls the model 10 times per round (each call capped at $5), and runs only when the clone
-installed at `~/.claude/skills/handoff` matches this repository, because `/handoff` loads the installed copy. The
-5-round run above cost $14.75 and took about 11 minutes, with the rounds running in parallel.
+the Korean-language scenario and calls the model 10 times per round (each call capped at $5). For condition 4 it
+installs this repository's copy as a project skill in the fixture repository, and it doesn't read the runner's
+`CLAUDE.md` or user settings (plugins, hooks). With the rounds running in parallel, the 5-round runs above took about
+11 minutes and $12.92 with Opus, and about 8 minutes and $6.12 with Sonnet.
 
 ```sh
 bash evals/run_4way_ab_test.sh <output dir> <rounds>
