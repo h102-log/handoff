@@ -2,7 +2,7 @@
 name: handoff
 description: >-
   Pauses a coding session at a safe point and writes a handoff doc for the next
-  session (Next Action Plan, NAP) at next/yyyy-mm-dd/rN.md, or resumes work in a
+  session (Next Action Plan, NAP) at handoff/yyyy-mm-dd/rN.md, or resumes work in a
   new session while verifying that doc. Always use this skill when the user asks
   to write a handoff or NAP, wrap up or switch sessions, or resume previous work
   (e.g. "write a handoff", "let's pick up where we left off", "인수인계 써줘",
@@ -13,7 +13,7 @@ description: >-
   resuming batches, servers or jobs — here "session" and "resume" mean a coding
   conversation only.
 argument-hint: "[resume [NAP path] | [lite] note]"
-allowed-tools: Bash(/bin/sh ${CLAUDE_SKILL_DIR}/scripts/nap.sh *), Edit(next/**), Write(next/**)
+allowed-tools: Bash(/bin/sh ${CLAUDE_SKILL_DIR}/scripts/nap.sh *), Edit(handoff/**), Write(handoff/**)
 compatibility: Claude Code v2.1.196+ only (requires git and python3 — scripts/nap.sh fixes up PATH and the interpreter)
 ---
 
@@ -42,9 +42,9 @@ Arguments: `$ARGUMENTS`
   command also stops with "Nothing to hand off" ("인수인계할 변화 없음").
 - If the snapshot's latest handoff doc is a `draft`, the previous session's handoff was cut off midway → resume mode, step 1.
 
-Handoff docs (작업지시서) are `next/yyyy-mm-dd/rN.md`. The highest number in the most recent date folder (excluding archive) is
+Handoff docs (작업지시서) are `handoff/yyyy-mm-dd/rN.md`. The highest number in the most recent date folder (excluding archive) is
 "what to do now", and an rN.md written by hand without frontmatter joins the same numbering. When a date folder no
-longer has a live (active or resumed) NAP, the script moves the whole folder to `next/archive/`.
+longer has a live (active or resumed) NAP, the script moves the whole folder to `handoff/archive/`.
 
 Read only the files for the selected mode. The skill body and the files you read stay in context until the session
 ends, so letting the write procedure mix into a freshly resumed session wastes its clean context.

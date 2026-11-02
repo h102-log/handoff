@@ -6,7 +6,7 @@ A Claude Code skill that pauses a coding session at a safe point and writes a ha
 (a Next Action Plan, NAP), or resumes work in a new session by verifying that document. Works in English and Korean.
 
 - **Write mode**: collects a snapshot of the current git state and writes what only this session knows (decisions and
-  their rationale, approaches that failed, the next first action) to `next/yyyy-mm-dd/rN.md`. A check script catches
+  their rationale, approaches that failed, the next first action) to `handoff/yyyy-mm-dd/rN.md`. A check script catches
   leftover placeholders, leaked secrets and changes made after the document was written.
 - **Resume mode**: reads the latest NAP, re-checks whether the code changed after it was written (drift) and re-verifies
   the document's assumptions, then shows a plan starting from the first action and continues once you approve.

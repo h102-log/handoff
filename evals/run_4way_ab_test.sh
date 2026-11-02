@@ -79,7 +79,7 @@ setup_case() {  # <번호> → 픽스처 저장소 경로. 폴더 이름(<번호
     echo "$w"
 }
 save_doc() {  # <채점 폴더> <저장소> — 작성 단계의 문서를 드리프트 전에 채점 폴더로 복사
-    local nap="$2/next/$TODAY/r1.md"
+    local nap="$2/handoff/$TODAY/r1.md"
     if [ -f "$nap" ]; then cp "$nap" "$1/doc.md"; else echo "(파일 미생성)" > "$1/doc.md"; fi
 }
 resume_case() {  # <채점 폴더> <저장소> <프롬프트> [추가 인자…] — 세션 밖 드리프트를 일으킨 뒤 재개
@@ -108,12 +108,12 @@ run_round() {  # <라운드 번호>
 
     # CASE 3: 스킬 없이 작업지시서 → /clear(새 세션) → 재개
     d="$G/r$r/case3"; mkdir -p "$d"; w="$(setup_case $((r * 10 + 3)))"; u="$(uuid)"
-    mkdir -p "$w/next/$TODAY"
+    mkdir -p "$w/handoff/$TODAY"
     claude_run "$w" "$d/ctx.jsonl" "$WT" "$CTX" --session-id "$u" "${NOSKILL[@]}"
-    claude_run "$w" "$d/write.jsonl" "$WT" "내일은 cap부터 하고 jitter는 full jitter로 할 예정이다. /clear 후 다음 세션에서 이어서 할 수 있도록 next/$TODAY/r1.md 에 상세한 다음 작업지시서를 작성해라." \
+    claude_run "$w" "$d/write.jsonl" "$WT" "내일은 cap부터 하고 jitter는 full jitter로 할 예정이다. /clear 후 다음 세션에서 이어서 할 수 있도록 handoff/$TODAY/r1.md 에 상세한 다음 작업지시서를 작성해라." \
         --resume "$u" "${NOSKILL[@]}"
     save_doc "$d" "$w"
-    resume_case "$d" "$w" "새 세션이다. next/$TODAY/r1.md 작업지시서를 읽고 작업을 재개하기 위한 상태 확인 및 실행 계획을 세워줘. 아직 파일은 수정하지 마." \
+    resume_case "$d" "$w" "새 세션이다. handoff/$TODAY/r1.md 작업지시서를 읽고 작업을 재개하기 위한 상태 확인 및 실행 계획을 세워줘. 아직 파일은 수정하지 마." \
         "${NOSKILL[@]}" --no-session-persistence
 
     # CASE 4: 실제 /handoff → /clear(새 세션) → 실제 /handoff resume
@@ -121,10 +121,10 @@ run_round() {  # <라운드 번호>
     claude_run "$w" "$d/ctx.jsonl" "$WT" "$CTX" --session-id "$u"
     claude_run "$w" "$d/write.jsonl" "$WT" "/handoff 내일은 cap부터 하고 jitter는 full jitter로" --resume "$u"
     save_doc "$d" "$w"
-    python3 "$NAP_PY" check "$w/next/$TODAY/r1.md" --root "$w" > "$d/check.txt" 2>&1 || true
+    python3 "$NAP_PY" check "$w/handoff/$TODAY/r1.md" --root "$w" > "$d/check.txt" 2>&1 || true
     resume_case "$d" "$w" "/handoff resume" --no-session-persistence
-    python3 "$NAP_PY" drift "$w/next/$TODAY/r1.md" --root "$w" > "$d/drift.txt" 2>&1 || true
-    { grep '^status:' "$w/next/$TODAY/r1.md" 2>/dev/null || echo 'status: none'
+    python3 "$NAP_PY" drift "$w/handoff/$TODAY/r1.md" --root "$w" > "$d/drift.txt" 2>&1 || true
+    { grep '^status:' "$w/handoff/$TODAY/r1.md" 2>/dev/null || echo 'status: none'
       grep '^판정:' "$d/drift.txt" || echo '판정: N/A'; } > "$d/post_state.txt"
 }
 
