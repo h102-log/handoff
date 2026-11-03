@@ -1,0 +1,30 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      # grade_ab.py selftest 가 한글을 출력한다 — Windows 의 파이썬은 파이프 출력에 로캘 코드 페이지를 써서 UTF-8 모드로 고정
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v7
+      - name: nap.py tests
+        shell: bash
+        run: bash evals/test_nap.sh
+      - name: grader selftest
+        shell: bash
+        run: |
+          for PY in python3 python "py -3"; do $PY -c "" >/dev/null 2>&1 && break; done
+          $PY evals/grade_ab.py selftest

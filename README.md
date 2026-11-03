@@ -1,5 +1,7 @@
 # handoff
 
+[![test](https://github.com/h102-log/handoff/actions/workflows/test.yml/badge.svg)](https://github.com/h102-log/handoff/actions/workflows/test.yml)
+
 **English** | [한국어](README.ko.md)
 
 A Claude Code skill that pauses a coding session at a safe point and writes a handoff document for the next session
@@ -16,20 +18,56 @@ repository, has a script check that file, and makes the next session check it ag
 - **Resume mode**: reads the latest NAP, re-checks whether the code changed after it was written (drift) and re-verifies
   the document's assumptions, then shows a plan starting from the first action and continues once you approve.
 
-The skill never changes git state. Committing the NAP is up to you; the only thing it adds to `.git/info/exclude` is
-the hash record files used for drift detection (`.rN.files`). NAPs get committed and shared, so secrets are written as
-variable names only, and the check script looks for token- or key-shaped values and for secret values from the
-project's `.env*` and `config*.json` files copied into the document.
-
-This is what a NAP's TL;DR looks like (translated excerpt of `evals/golden/nap_payhook.md`):
+This is what a NAP's TL;DR looks like (excerpt of `evals/golden/nap_payhook.en.md`):
 
 ```markdown
 ## 0. TL;DR
-- Goal: Replace the fixed 60-second retry interval with exponential backoff with a cap and full jitter, so retries don't all pile up during an outage.
+- Goal: Replace the fixed 60-second retry interval with exponential backoff that has a cap and full jitter, so retries do not pile up all at once during an outage.
 - Where we are: step 2 of 5 done — clock injection (committed) and a `compute_delay` draft (uncommitted). The cap is next.
 - ▶ First action: `src/payhook/backoff.py:4` — apply the cap in `compute_delay` (`min(base * 2 ** attempt, max_delay)`) → `PYTHONPATH=src python3 -m unittest discover -s tests`
-- Note: start with the cap tomorrow, and use full jitter (user)
+- Note: start with the cap tomorrow, and use full jitter for the jitter (user)
 ```
+
+## Quick start
+
+Requires Claude Code v2.1.196 or later, git, python3 (standard library only) and `/bin/sh` (Git Bash on Windows).
+
+Inside Claude Code:
+
+```text
+/plugin marketplace add h102-log/handoff
+/plugin install handoff@handoff
+```
+
+| Command | What it does |
+|---|---|
+| `/handoff:handoff [note]` | Write a NAP. The note is kept in the document as is |
+| `/handoff:handoff lite [note]` | Lightweight write. Skips the cold-read check, for when the context is nearly full |
+| `/handoff:handoff resume [NAP path]` | Resume. Without a path, the latest NAP is used |
+
+Write a NAP, then `/clear` and resume in the new session (plan mode recommended). You can also just ask in plain
+words, e.g. "write a handoff" or "let's pick up where we left off". Korean works too (e.g. "인수인계 써 줘", "이어서 하자").
+
+To call it as `/handoff` instead, clone it as a personal skill rather than installing the plugin:
+
+```sh
+git clone https://github.com/h102-log/handoff.git ~/.claude/skills/handoff
+```
+
+To use it in one project only, clone it into that project's `.claude/skills/handoff` instead. To update:
+`git -C ~/.claude/skills/handoff pull`. The rest of this README writes the command as `/handoff`.
+
+## When to use it
+
+- **Low on context, but continuing in the same session**: `/compact` is enough. In the runs below, `/compact` scored
+  slightly higher on resuming, because the same session carries on.
+- **After `/clear`, the next day, or when someone else picks the work up**: `/handoff`. The NAP is a file in the
+  repository, checked by a script when it is written and checked against the code when it is resumed.
+- **`claude --continue` / `--resume`** reopen the previous conversation as it was. That works if it still had room, but
+  it brings the old context back as it was (a nearly full one stays nearly full), and nobody else can read it.
+- **Asking for a handoff doc in plain words** gets you most of the way: in the runs below, those docs passed 5 of the 6
+  doc checks. `/handoff` adds a first action down to `file:line`, a script check (placeholders, secrets, state), and
+  drift detection and re-verification on resume, at a higher cost.
 
 ## Results
 
@@ -37,17 +75,20 @@ The same half-finished task was carried into a new session in four ways, 5 round
 Sonnet 5.5, using Claude Code (`claude -p`, effort xhigh) without the runner's `CLAUDE.md` or user settings (plugins,
 hooks):
 
-| Condition | Handoff doc (6 checks) | Resumed session (5 checks) | Cost per run |
-|---|---|---|---|
-| 1. No doc: a new session starts from the repository | — | 3.0 · 3.0 | $0.22 · $0.10 |
-| 2. `/compact`, then the same session continues | 5.0 · 4.4¹ | **4.6 · 4.8** | $0.68 · $0.29 |
-| 3. A handoff doc asked for in plain words, read by a new session | 5.0 · 5.0 | 4.0 · 4.4 | $0.73 · $0.29 |
-| 4. `/handoff`, then `/handoff resume` in a new session | **6.0 · 6.0** | 4.4 · 4.6 | $0.95 · $0.54 |
+1. **No doc**: a new session starts from the repository
+2. **`/compact`**, then the same session continues
+3. **Plain doc**: a handoff doc asked for in plain words, read by a new session
+4. **`/handoff`**, then `/handoff resume` in a new session
 
-Each cell is Opus · Sonnet: checks passed per round, averaged over 5 rounds. Cost is what Claude Code reported for all
-the calls in one run.
+| Condition | Doc, Opus | Doc, Sonnet | Resume, Opus | Resume, Sonnet | Cost, Opus | Cost, Sonnet |
+|---|---|---|---|---|---|---|
+| 1. No doc | — | — | 3.0 | 3.0 | $0.22 | $0.10 |
+| 2. `/compact` | 5.0 | 4.4¹ | **4.6** | **4.8** | $0.68 | $0.29 |
+| 3. Plain doc | 5.0 | 5.0 | 4.0 | 4.4 | $0.73 | $0.29 |
+| 4. `/handoff` | **6.0** | **6.0** | 4.4 | 4.6 | $0.95 | $0.54 |
 
-What the numbers say:
+Doc is the checks the handoff doc passed (out of 6) and Resume the checks the resumed session passed (out of 5), each
+averaged over 5 rounds. Cost is what Claude Code reported for all the calls in one run.
 
 - **The NAP passed all 6 checks in all 10 rounds, with both models.** The check that set it apart is the first
   action. The docs from conditions 2 and 3 also named the file and the test command, but none of those 20 gave a line
@@ -63,6 +104,13 @@ What the numbers say:
 - **Cost.** `/handoff` costs the most: $0.95 per run with Opus and $0.54 with Sonnet, against $0.68–0.73 and $0.29
   for conditions 2 and 3. `/handoff` run with Sonnet cost less than `/compact` run with Opus and still passed all 6
   NAP checks.
+
+**Limits**: one scenario, in Korean, 5 rounds per model. Measured on 2026-11-02 with Claude Code 2.1.316 on Windows.
+Grading is by keywords, so the same content in other words is missed (¹, ²).
+
+<details>
+<summary>Per-check results, notes, scenario and grading</summary>
+
 - Every condition kept the basics. The docs from conditions 2–4 copied no secret and recorded the dead ends, your
   note and the open question. Every resumed session asked before going ahead and changed no files, and all but one
   (Sonnet, `/compact`) named the changes made outside the session.
@@ -110,8 +158,7 @@ progress is committed and `handler.py` is edited outside the session.
 `selftest` confirms that a free-form doc and reply with the same content get full marks. In condition 2, the
 compaction summary is graded as the handoff doc.
 
-**Limits**: one scenario, in Korean, 5 rounds per model. Measured on 2026-11-02 with Claude Code 2.1.316 on Windows.
-Grading is by keywords, so the same content in other words is missed (¹, ²).
+</details>
 
 ## How it works
 
@@ -137,7 +184,22 @@ Grading is by keywords, so the same content in other words is missed (¹, ²).
 1. **Pick the NAP**: the latest live one on the current branch, unless you pass a path.
 2. **Drift.** The script compares the recorded branch, HEAD and file hashes with the repository now, and reports a
    branch switch, new commits, rewritten history and the files changed since the handoff. Claude reports drift before
-   making a plan and asks you about it. It may be your own work, so nothing is reverted.
+   making a plan and asks you about it. It may be your own work, so nothing is reverted. In the Results scenario, after
+   the work in progress was committed and `handler.py` was edited outside the session, it reports the following.
+   `backoff.py`, committed as it was, is not listed as changed.
+
+   ```text
+   NAP: handoff/2026-11-03/r1.md — recorded feat/webhook-retry @ a73cb53 (2026-11-03T10:08+09:00)
+   Now: feat/webhook-retry @ 6ad82da
+   Verdict: DRIFT — 1 new commit(s); work content changed (file contents differ from record time)
+
+   [Commits since recording]
+   6ad82da wip: backoff draft
+
+   [Files changed since the handoff]
+     newly changed  src/payhook/handler.py
+   ```
+
 3. **Re-verify.** Each ⚠️ item is checked again and marked ✅ verified, ❌ disproved or ❔ still unknown. A disproved item
    changes the plan.
 4. **Plan, then wait.** Claude shows a short summary, the drift and re-verification results, the plan starting from the
@@ -165,68 +227,36 @@ Grading is by keywords, so the same content in other words is missed (¹, ²).
 Sections with nothing to say are deleted; 0, 1, 2, 6 and 9 always stay. A full example:
 [evals/golden/nap_payhook.en.md](evals/golden/nap_payhook.en.md).
 
-## Requirements
+### What it changes in your repository
 
-- Claude Code v2.1.196 or later
-- git, python3 (standard library only)
-- `/bin/sh` — Git Bash on Windows
+The skill never changes git state. Committing the NAP is up to you; the only thing it adds to `.git/info/exclude` is
+the hash record files used for drift detection (`.rN.files`). NAPs get committed and shared, so secrets are written as
+variable names only, and the check script looks for token- or key-shaped values and for secret values from `.env*`
+files at the repository root and `config*.json` files (up to two folders deep) copied into the document.
 
-## Installation
+## Keeping NAPs out of git
 
-### As a plugin
+NAPs are meant to be committed so that others can read them. To keep them out of the repository, add `handoff/` to
+`.gitignore` (for everyone) or to `.git/info/exclude` (only for you). Writing, checking and drift detection work the
+same.
 
-Inside Claude Code:
+## Uninstall
 
-```text
-/plugin marketplace add h102-log/handoff
-/plugin install handoff@handoff
-```
-
-The skill is invoked as `/handoff:handoff`.
-
-### Direct clone
-
-```sh
-git clone https://github.com/h102-log/handoff.git ~/.claude/skills/handoff
-```
-
-Invoke it as `/handoff` in every project. To use it in one project only, clone it into that project's
-`.claude/skills/handoff` instead. To update: `git -C ~/.claude/skills/handoff pull`.
-
-## Usage
-
-| Command | What it does |
-|---|---|
-| `/handoff [note]` | Write a NAP. The note is kept in the document as is |
-| `/handoff lite [note]` | Lightweight write. Skips the cold-read check, for when the context is nearly full |
-| `/handoff resume [NAP path]` | Resume. Without a path, the latest NAP is used |
-
-If you installed it as a plugin, use `/handoff:handoff` instead of `/handoff`. You can also just ask in plain words,
-e.g. "write a handoff" or "let's pick up where we left off". Korean works too (e.g. "인수인계 써 줘", "이어서 하자").
+- Plugin: `claude plugin uninstall handoff@handoff`, then `claude plugin marketplace remove handoff`
+- Direct clone: delete `~/.claude/skills/handoff` (or the project's `.claude/skills/handoff`)
+- Each repository you used it in keeps the `handoff/` folder with your NAPs and the line `/handoff/**/.*.files` that
+  the skill added to `.git/info/exclude`. Delete them if you no longer need them.
 
 ## Language
 
-- The NAP body and Claude's replies follow the language you write in. There are two templates — English
-  `assets/nap-template.en.md` and Korean `assets/nap-template.ko.md`. In any other language, the English template's
-  section headings are kept as they are and the body is written in your language.
-- The check command accepts a NAP written from either template.
-- The language of the script (`scripts/nap.sh`) messages is chosen in this order:
-  1. the `--lang ko|en` option — the skill passes it to match your language
-  2. the `HANDOFF_LANG` environment variable (`ko` or `en`)
-  3. the system locale — `ko` for a Korean locale, `en` otherwise
+The NAP body and Claude's replies follow the language you write in. English and Korean each have a template
+(`assets/nap-template.en.md`, `assets/nap-template.ko.md`); in any other language, the English section headings are
+kept and the body is written in your language. The check command accepts a NAP from either template. When you type
+only a command (e.g. `/handoff resume` right after `/clear`), the language of the NAP being resumed is used.
 
-The snapshot collected automatically when the skill loads runs without `--lang`, so it follows `HANDOFF_LANG` or the
-locale. When you type only a command (e.g. `/handoff resume` right after `/clear`), the skill uses the language of the
-NAP being resumed, or of that snapshot if there is no NAP. To set the snapshot's language regardless of the locale,
-put `HANDOFF_LANG` in the `env` block of `~/.claude/settings.json` (use `"ko"` for Korean):
-
-```json
-{
-  "env": {
-    "HANDOFF_LANG": "en"
-  }
-}
-```
+Script messages follow the `--lang ko|en` option (the skill passes it), then the `HANDOFF_LANG` environment variable,
+then the system locale (`ko` for a Korean locale, `en` otherwise). The snapshot taken when the skill loads has no `--lang`; to set its language regardless of the
+locale, add `"env": { "HANDOFF_LANG": "en" }` to `~/.claude/settings.json` (`"ko"` for Korean).
 
 ## Tests
 
@@ -234,6 +264,8 @@ put `HANDOFF_LANG` in the `env` block of `~/.claude/settings.json` (use `"ko"` f
 bash evals/test_nap.sh               # scripts/nap.py only, no model
 python3 evals/grade_ab.py selftest   # the grader used for Results, no model
 ```
+
+CI runs both on Ubuntu, macOS and Windows.
 
 `evals/run_4way_ab_test.sh` reproduces [Results](#results). It uses the claude CLI to compare the four approaches on
 the Korean-language scenario and calls the model 10 times per round (each call capped at $5). For condition 4 it

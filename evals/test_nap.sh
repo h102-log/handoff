@@ -6,7 +6,8 @@ set -uo pipefail
 export HANDOFF_LANG=ko
 # python3 가 Windows 스토어 별칭(실행 실패)이면 nap.sh 와 같은 후보 순서로 실제 인터프리터를 쓴다
 for PY in python3 python "py -3"; do $PY -c "" >/dev/null 2>&1 && break; done
-python3() { $PY "$@"; }
+# command 로 불러야 한다 — PY 가 python3 이면 이 함수가 자기 자신을 끝없이 불러 bash 가 죽는다(CI 세 OS 실측)
+python3() { command $PY "$@"; }
 HERE="$(cd "$(dirname "$0")" && pwd)"; NAP="$HERE/../scripts/nap.py"; FX="$HERE/fixtures"
 T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
 TODAY="$(date +%F)"  # nap.py 가 쓰는 로컬 날짜(dt.date.today())와 같다
