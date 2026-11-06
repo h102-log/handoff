@@ -2,8 +2,8 @@
 name: handoff
 description: >-
   Pauses a coding session at a safe point and writes a handoff doc for the next
-  session (Next Action Plan, NAP) at handoff/yyyy-mm-dd/rN.md, or resumes work in a
-  new session while verifying that doc. Always use this skill when the user asks
+  session (Next Action Plan, NAP) at .handoff/yyyy-mm-dd/HHMM-<branch>.md, or resumes
+  work in a new session while verifying that doc. Always use this skill when the user asks
   to write a handoff or NAP, wrap up or switch sessions, or resume previous work
   (e.g. "write a handoff", "let's pick up where we left off", "인수인계 써줘",
   "세션 정리하자", "이어서 하자", "작업 재개"). Never run it unprompted. Do not
@@ -13,7 +13,7 @@ description: >-
   resuming batches, servers or jobs — here "session" and "resume" mean a coding
   conversation only.
 argument-hint: "[resume [NAP path] | [lite] note]"
-allowed-tools: Bash(/bin/sh ${CLAUDE_SKILL_DIR}/scripts/nap.sh *), Edit(handoff/**), Write(handoff/**)
+allowed-tools: Bash(/bin/sh ${CLAUDE_SKILL_DIR}/scripts/nap.sh *), Edit(.handoff/**), Write(.handoff/**)
 compatibility: Claude Code v2.1.196+ only (requires git and python3 — scripts/nap.sh fixes up PATH and the interpreter)
 ---
 
@@ -42,9 +42,13 @@ Arguments: `$ARGUMENTS`
   command also stops with "Nothing to hand off" ("인수인계할 변화 없음").
 - If the snapshot's latest handoff doc is a `draft`, the previous session's handoff was cut off midway → resume mode, step 1.
 
-Handoff docs (작업지시서) are `handoff/yyyy-mm-dd/rN.md`. The highest number in the most recent date folder (excluding archive) is
-"what to do now", and an rN.md written by hand without frontmatter joins the same numbering. When a date folder no
-longer has a live (active or resumed) NAP, the script moves the whole folder to `handoff/archive/`.
+Handoff docs (작업지시서) are `.handoff/yyyy-mm-dd/HHMM-<branch>.md` in the repository's main working tree; all of its
+worktrees share this one folder, and the `.gitignore` the script puts inside it keeps the folder out of git. Names sort
+by time: the newest doc on the current branch is "what to do now", and a doc written by hand in a date folder without
+frontmatter (named `HHMM….md`) joins the same order. The `tree` field records the working tree the doc was written in.
+When a date folder no longer has a live (active or resumed) NAP, the script moves the whole folder to
+`.handoff/archive/`. The environment variable `HANDOFF_DIR` moves the folder elsewhere (a relative path is under the
+current working tree; `HANDOFF_DIR=handoff` keeps the docs in the repository to be committed).
 
 Read only the files for the selected mode. The skill body and the files you read stay in context until the session
 ends, so letting the write procedure mix into a freshly resumed session wastes its clean context.
@@ -64,16 +68,18 @@ mark done        /bin/sh ${CLAUDE_SKILL_DIR}/scripts/nap.sh mark done [--file <N
 command so far (e.g. `/handoff resume` right after `/clear`), use the language of the NAP being resumed, or of the
 snapshot above if there is no NAP. Use the same value for every command in the session.
 
-If the path is omitted, the target is the latest handoff doc. Pass a path only when continuing a NAP that is not the latest.
+If the path is omitted, the target is the latest handoff doc on the current branch. Pass a path only when continuing a
+NAP that is not that one. Run the commands in the working tree you worked in (after `EnterWorktree`, the worktree): when
+it belongs to the same repository as `--root`, the script records that tree.
 
 ## Principles for both modes
 
 - Do not change git state. Do not commit, stash, reset, checkout or switch branches; if needed, only propose it. This
-  is so the user's commit flow is not broken. Committing the handoff docs (rN.md) and folders moved to archive is also
-  up to the user. Only the hash record files used for drift detection (.rN.files) are registered by the script in the
-  local ignore list (.git/info/exclude).
+  is so the user's commit flow is not broken. The handoff docs are not committed: the `.gitignore` inside `.handoff/`
+  keeps them out of git. With `HANDOFF_DIR` pointing into the repository, committing them is up to the user (the
+  folder's `.gitignore` then excludes only the drift hash record files, `.HHMM-<branch>.files`).
 - Never copy secrets (tokens, passwords, keys, URLs containing credentials) anywhere. Write only variable names.
-  Handoff docs get committed and are shared with everyone who can see the repository.
+  Handoff docs get read by other sessions and may be copied, shared or committed.
 - Trust the snapshot, command output and file contents over memory. Mark anything you could not verify as an assumption.
 - Reply to the user in their language; if they have typed nothing but the command, in the language of the NAP being
   resumed (or of the snapshot if there is no NAP).

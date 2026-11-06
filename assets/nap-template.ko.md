@@ -8,6 +8,7 @@ branch: <prepare 출력값>
 head: <prepare 출력값>
 dirty: <prepare 출력값>
 worktree: <prepare 출력값>
+tree: <prepare 출력값>
 session: <prepare 출력값>
 previous: <prepare 출력값>
 ---

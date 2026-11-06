@@ -7,12 +7,13 @@ Steps 1–4 are read-only. Running them in plan mode is recommended.
 
 ## 1. Choose the NAP to continue
 
-Look at the `handoff/` entry in the snapshot at the top of SKILL.md.
+Look at the handoff entry (`### handoff`) in the snapshot at the top of SKILL.md. Its "latest handoff doc" is the newest
+one on the current branch.
 
 If the NAP to continue is not the latest handoff doc, pass its path to the drift, mark resumed and mark done commands
 from here on (drift as a positional argument, mark with `--file`).
 
-- If the arguments contain a path, use that NAP. If the file is inside `handoff/archive/`, the work is finished, so tell
+- If the arguments contain a path, use that NAP. If the file is inside `.handoff/archive/`, the work is finished, so tell
   the user that and ask what to do.
 - If the latest handoff doc is an active (active or resumed) NAP on the current branch, use it.
 - If the latest handoff doc is a `draft`, the previous session's handoff was cut off midway. Use the draft only as a
@@ -20,8 +21,12 @@ from here on (drift as a positional argument, mark with `--file`).
   kept in place). If there is no previous, work it out directly from the draft and the git state.
 - If the latest handoff doc was written by hand without frontmatter, read and follow it. There is no drift verdict, so
   instead of step 2, compare the document's description of the state directly against `git status` and `git log`.
-- If the latest handoff doc belongs to another branch and the snapshot shows "Other active NAPs on the current branch"
-  ("현재 브랜치의 다른 활성 NAP"), ask the user whether to continue that file.
+- If the snapshot shows "Other active NAPs on the current branch" ("현재 브랜치의 다른 활성 NAP"), ask the user whether to
+  continue one of those instead.
+- If the current branch has no handoff doc ("현재 브랜치의 작업지시서: 없음") but the snapshot lists "Active NAPs on other
+  branches" ("다른 브랜치의 활성 NAP"), ask the user which one to continue. Drift is judged against the doc's recorded
+  working tree (`tree`) wherever you run it; if that is not the current tree, move the session there (e.g. with
+  `EnterWorktree`) before the first file write in step 5.
 - If there is no handoff doc, or the latest one is done, tell the user there is nothing to continue.
 
 ## 2. Check for drift
@@ -55,6 +60,6 @@ Look at the snapshot's drift verdict.
 - After approval, run the mark resumed command before the first file write. That way, on the next resume, it is clear
   that this NAP has already been picked up.
 - When the next actions and done criteria are all met, mark it done with the mark done command. If no live NAP remains
-  in that date folder, the whole folder is moved to `handoff/archive/`.
-- If the session has to be cut again midway, write a new NAP in write mode (`/handoff`). The new NAP gets the next
-  number and is linked through previous, and once it passes check, the previous NAP becomes superseded.
+  in that date folder, the whole folder is moved to `.handoff/archive/`.
+- If the session has to be cut again midway, write a new NAP in write mode (`/handoff`). The new NAP is a new file
+  linked through previous, and once it passes check, the previous NAP becomes superseded.
