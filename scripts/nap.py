@@ -1,21 +1,24 @@
 #!/usr/bin/env python3
 """handoff 스킬 보조 스크립트. 표준 라이브러리만 쓴다 (python3 + git).
 
-작업지시서(NAP)는 handoff/yyyy-mm-dd/rN.md 다. archive 를 뺀 가장 최근 날짜 폴더의 가장 큰 번호가 "지금 할 일"이다.
-frontmatter 없이 직접 쓴 rN.md 도 같은 번호 체계에 들어간다 (드리프트 판정만 못 한다).
+작업지시서(NAP)는 저장소 본 작업 트리의 .handoff/yyyy-mm-dd/HHMM-<브랜치>.md 다. 워크트리들도 이 폴더 하나를 같이 쓰고,
+폴더 안 .gitignore(*) 로 git 이 폴더째 무시한다. 환경 변수 HANDOFF_DIR 로 폴더를 바꿀 수 있다 (상대 경로는 현재 작업 트리 기준).
+이름은 시각순이고, 현재 브랜치의 가장 최근 문서가 "지금 할 일"이다. 날짜 폴더에 직접 넣은 HHMM….md(frontmatter 없음)도
+같은 순서에 들어간다 (드리프트 판정만 못 한다).
 
 하위 명령
-  snapshot  현재 git·handoff/ 상태 요약. 스킬 로드 시 주입되므로 어떤 경우에도 exit 0.
-  prepare   오늘 날짜 폴더에 다음 번호 rN.md 초안(status draft) 생성·기계 필드 출력. 기존 파일은 건드리지 않는다.
+  snapshot  현재 git·작업지시서 폴더 상태 요약. 스킬 로드 시 주입되므로 어떤 경우에도 exit 0.
+  prepare   오늘 날짜 폴더에 HHMM-<브랜치>.md 초안(status draft) 생성·기계 필드 출력. 기존 파일은 건드리지 않는다.
             같은 브랜치의 활성 NAP 에 변화가 없으면 --force 없이는 멈춘다 (새 세션에서의 오발동 방지).
   check     NAP 검증: 구조·기록 상태 일치·경로·시크릿·맥락 의존 표현 (오류 시 exit 1).
             통과하면 draft → active 로 승격하고, previous 의 같은 브랜치 NAP 를 superseded 로 바꾼다.
-  drift     NAP 기록 시점과 현재 상태 비교 (드리프트 시 exit 1). handoff/ 만 바꾼 커밋은 드리프트가 아니다.
+  drift     NAP 기록 시점과 현재 상태 비교 (드리프트 시 exit 1). 기록한 작업 트리(tree)를 기준으로 본다.
+            작업지시서 폴더만 바꾼 커밋은 드리프트가 아니다.
   mark      NAP 상태 변경: resumed | done
 
 상태 전이: draft(prepare) → active(check 통과) → resumed(mark) → done(mark) | superseded(다음 NAP 의 check)
 어느 단계에서 세션이 끊겨도 디스크가 사실을 말하도록, 이전 NAP 의 상태는 새 NAP 가 검사를 통과할 때 바꾼다.
-날짜 폴더에 살아 있는(active·resumed) NAP 가 없어지면 폴더째 handoff/archive/ 로 옮긴다 (check·mark done 시점).
+날짜 폴더에 살아 있는(active·resumed) NAP 가 없어지면 폴더째 archive/ 로 옮긴다 (check·mark done 시점).
 """
 from __future__ import annotations
 
@@ -31,10 +34,13 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-HANDOFF, ARC = "handoff", "archive"
+STORE, ARC = ".handoff", "archive"
 DATE_DIR = re.compile(r"\d{4}-\d{2}-\d{2}$")
-NAP_NAME = re.compile(r"r(\d+)\.md$")
-MANIFEST_IGNORE = f"/{HANDOFF}/**/.*.files"  # 해시 기록 파일만 로컬 무시 — 작업지시서(rN.md)는 사용자가 커밋한다
+# HHMM[b-z][-브랜치].md — 같은 분에 같은 브랜치로 또 쓰면 b, c … 가 붙는다. 이름순이 곧 시간순이다
+NAP_NAME = re.compile(r"(\d{4})([a-z]?)(?:-.+)?\.md$")
+# 기본 폴더는 통째로, HANDOFF_DIR 폴더는 해시 기록 파일만 git 에서 뺀다 — .git 안을 쓰지 않으므로 샌드박스에서도 된다
+GITIGNORE_DEFAULT = "# Created by the handoff skill: keeps local handoff docs out of git.\n*\n"
+GITIGNORE_CUSTOM = "# Created by the handoff skill: drift hash records stay local.\n.*.files\n"
 LIVE = ("active", "resumed")  # 재개 대상
 DRAFT = "draft"  # prepare 가 만든 초안 — check 통과 시 active 로 승격
 MANIFEST_VERSION = 2  # 해시 방식이 바뀌면 올린다. v2: 텍스트 파일 줄바꿈을 LF 로 정규화한 뒤 해시
@@ -43,22 +49,26 @@ TEMPLATES = {lang: Path(__file__).resolve().parent.parent / "assets" / f"nap-tem
 UI_LANG = "ko"  # main() 에서 --lang → HANDOFF_LANG → 로캘 순으로 정한다
 DESCRIPTION_EN = """handoff skill helper script. Standard library only (python3 + git).
 
-A handoff doc (NAP) is handoff/yyyy-mm-dd/rN.md. The highest number in the most recent date folder (archive excluded)
-is "what to do now". Hand-written rN.md files without frontmatter join the same numbering (drift cannot be checked).
+A handoff doc (NAP) is .handoff/yyyy-mm-dd/HHMM-<branch>.md in the repository's main working tree. Its worktrees share
+that one folder, and the .gitignore (*) inside it keeps the folder out of git. The HANDOFF_DIR environment variable
+moves the folder (a relative path is under the current working tree). Names sort by time, and the newest doc on the
+current branch is "what to do now". Hand-written HHMM….md files without frontmatter in a date folder join the same
+order (drift cannot be checked).
 
 Subcommands
-  snapshot  Summary of the current git and handoff/ state. Injected at skill load, so it always exits 0.
-  prepare   Create the next rN.md draft (status draft) in today's date folder and print the machine fields.
+  snapshot  Summary of the current git and handoff folder state. Injected at skill load, so it always exits 0.
+  prepare   Create an HHMM-<branch>.md draft (status draft) in today's date folder and print the machine fields.
             Existing files are left untouched. Stops without --force if the active NAP on the same branch has
             no changes (guards against misfiring in a new session).
   check     Validate a NAP: structure, recorded state match, paths, secrets, context-dependent phrases (exit 1 on errors).
             On pass, promotes draft → active and marks the previous same-branch NAP superseded.
-  drift     Compare the NAP's recorded state with now (exit 1 on drift). Commits that only touch handoff/ are not drift.
+  drift     Compare the NAP's recorded state with now (exit 1 on drift), against the working tree it recorded (tree).
+            Commits that only touch the handoff folder are not drift.
   mark      Change NAP status: resumed | done
 
 Status flow: draft (prepare) → active (check passed) → resumed (mark) → done (mark) | superseded (next NAP's check)
 The previous NAP's status changes only when the new NAP passes check, so the disk tells the truth wherever a session stops.
-When a date folder has no live (active, resumed) NAP left, the whole folder moves to handoff/archive/ (at check or mark done).
+When a date folder has no live (active, resumed) NAP left, the whole folder moves to archive/ (at check or mark done).
 """
 ENUMS = {
     "kind": {"implementation", "research"},
@@ -137,27 +147,75 @@ def git(root, *args, binary=False):
     return p.stdout if binary else p.stdout.decode("utf-8", "replace").rstrip("\n")
 
 
+def find_top(p):
+    """p 에서 위로 올라가며 .git(폴더, 또는 워크트리의 .git 파일)이 있는 첫 폴더. 없으면 None."""
+    for d in (p, *p.parents):
+        if (d / ".git").exists():
+            return d
+    return None
+
+
+def main_tree(top):
+    """작업 트리 top 이 속한 저장소의 본 작업 트리. 링크된 워크트리가 아니면 top 그대로.
+
+    git 을 부르지 않고 워크트리의 .git 파일(gitdir:)과 그 폴더의 commondir 을 읽는다 — git 하위 프로세스가 느린 PC 가
+    있다(status_v2 참고). 서브모듈·bare 저장소처럼 공용 폴더가 `.git` 이 아니면 top 을 쓴다.
+    """
+    f = top / ".git"
+    try:
+        if f.is_file():
+            m = re.match(r"gitdir:\s*(.+)", f.read_text("utf-8").strip())
+            if m:
+                gitdir = Path(m.group(1).strip())
+                gitdir = (gitdir if gitdir.is_absolute() else top / gitdir).resolve()
+                cd = gitdir / "commondir"
+                common = (gitdir / cd.read_text("utf-8").strip()).resolve() if cd.is_file() else gitdir
+                if common.name == ".git" and common.is_dir():
+                    return common.parent
+    except OSError:
+        pass
+    return top
+
+
 def resolve_root(arg):
-    """--root 인자(치환 안 된 값이면 무시) → git 최상위, 아니면 해당 디렉터리."""
+    """--root 인자(치환 안 된 값이면 무시) → git 최상위, 아니면 해당 디렉터리.
+
+    cwd 가 같은 저장소의 다른 작업 트리(워크트리) 안이면 그 트리를 쓴다.
+    [이유] ${CLAUDE_PROJECT_DIR} 는 EnterWorktree 뒤에도 세션을 연 폴더를 가리킨다(Claude Code 문서, 훅 기준). 이 값만
+           따르면 워크트리에서 한 작업이 본 트리 상태로 기록된다 (2026-11-04 실측 — 기계 필드가 본 트리 값으로 남음).
+    """
     base = None
     if arg and "${" not in arg:
         p = Path(arg).expanduser()
         if p.is_dir():
             base = p
-    base = (base or Path.cwd()).resolve()
+    cwd = Path.cwd().resolve()
+    base = (base or cwd).resolve()
     top = git(base, "rev-parse", "--show-toplevel")
-    return (Path(top).resolve(), True) if top else (base, False)
+    if not top:
+        return base, False
+    top = Path(top).resolve()
+    here = find_top(cwd)
+    if here is not None and here != top and main_tree(here) == main_tree(top):
+        return here, True
+    return top, True
+
+
+def inside(p, root):
+    """p 가 root 안이면 root 기준 상대 경로(posix), 아니면 None."""
+    try:
+        return Path(p).resolve().relative_to(Path(root).resolve()).as_posix()
+    except ValueError:
+        return None
 
 
 def rel(p, root):
-    try:
-        return Path(p).resolve().relative_to(root).as_posix()
-    except ValueError:
-        return str(p)
+    r = inside(p, root)
+    return r if r is not None else Path(p).resolve().as_posix()
 
 
-def now_iso():
-    return dt.datetime.now().astimezone().isoformat(timespec="minutes")
+def now_iso(t=None):
+    return (t or dt.datetime.now()).astimezone().isoformat(timespec="minutes")
 
 
 def save(p, text):
@@ -165,16 +223,67 @@ def save(p, text):
     Path(p).write_text(text, "utf-8", newline="\n")
 
 
+def store_dir(root, is_git):
+    """(작업지시서 폴더, 기본 폴더인가). 기본은 본 작업 트리의 .handoff/, HANDOFF_DIR 이 있으면 그 폴더(상대 경로는 root 기준).
+
+    [이유] 워크트리마다 따로 두면 본 트리에서 연 새 세션이 워크트리의 작업지시서를 못 본다. .git/ 안은 Claude Code 보호
+           경로라 Write·Edit 마다 확인을 받고(dontAsk 모드는 거부) 샌드박스에서는 쓰기가 막힌다(권한 모드·샌드박스 문서).
+    """
+    v = os.path.expandvars(os.environ.get("HANDOFF_DIR", "").strip())
+    if v:
+        p = Path(v).expanduser()
+        return (p if p.is_absolute() else root / p).resolve(), False
+    return ((main_tree(root) if is_git else root) / STORE).resolve(), True
+
+
+def ensure_store(store, default):
+    """폴더와 그 안의 .gitignore 를 만든다. .gitignore 를 새로 만들었으면 True."""
+    store.mkdir(parents=True, exist_ok=True)
+    gi = store / ".gitignore"
+    if gi.exists():
+        return False
+    save(gi, GITIGNORE_DEFAULT if default else GITIGNORE_CUSTOM)
+    return True
+
+
+def slug_of(branch):
+    """브랜치 이름 → 파일 이름 조각 (feat/aias-fx → feat-aias-fx, 40자까지)."""
+    s = re.sub(r"[^\w.-]+", "-", branch).strip("-.")
+    return s[:40].rstrip("-.") or "branch"
+
+
+def cur_branch(root, is_git):
+    """현재 브랜치 이름 — state() 의 branch 와 같은 표기(분리 HEAD 면 detached, git 이 아니면 n/a)."""
+    if not is_git:
+        return "n/a"
+    return git(root, "symbolic-ref", "--short", "-q", "HEAD") or "detached"
+
+
+def tree_of(fm, root):
+    """NAP 를 기록한 작업 트리. 같은 저장소의 다른 트리로 남아 있을 때만 그것을, 아니면 root.
+
+    복사·이동한 저장소에서는 기록된 경로가 다른 저장소를 가리킬 수 있어 본 트리가 같은지 확인한다.
+    """
+    t = fm.get("tree", "")
+    if t and t != "n/a":
+        p = Path(t)
+        if p.is_dir():
+            p = p.resolve()
+            if p != root and main_tree(p) == main_tree(root):
+                return p
+    return root
+
+
 def empty_tree(root):
     return git(root, "hash-object", "-t", "tree", "--stdin") or "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
 
-def status_v2(root):
+def status_v2(root, excl=None):
     """git status v2 한 번으로 브랜치·HEAD·변경 항목을 얻는다. 실패하면 None.
 
     [이유] 이 PC 는 git 하위 프로세스 1회에 1~2초가 걸려(2026-09-29 실측) 호출 수가 곧 스킬 로드 지연이다.
            rev-parse·symbolic-ref·status 3회를 1회로 합친다.
-    항목은 (XY, 경로). XY 는 v1 표기(변경 없음 = 공백)로 맞추고, handoff/ 아래는 제외한다.
+    항목은 (XY, 경로). XY 는 v1 표기(변경 없음 = 공백)로 맞추고, excl(작업 트리 안의 작업지시서 폴더) 아래는 제외한다.
     """
     raw = git(root, "status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all", "--no-renames")
     if raw is None:
@@ -207,16 +316,21 @@ def status_v2(root):
                 continue
         except IndexError:
             continue
-        if path == HANDOFF or path.startswith(HANDOFF + "/"):
+        if excl and (path == excl or path.startswith(excl + "/")):
             continue
         entries.append((xy.replace(".", " "), path))
     return dict(oid="" if oid == "(initial)" else oid,
                 branch="detached" if head == "(detached)" else head, entries=entries)
 
 
-def diff_numstat(root, base):
+def pathspec(excl):
+    """작업 트리 전체에서 작업지시서 폴더(excl)만 뺀 git pathspec."""
+    return ["--", "."] + ([f":(exclude){excl}"] if excl else [])
+
+
+def diff_numstat(root, base, excl=None):
     """base 대비 달라진 추적 파일 → {경로: (추가 행, 삭제 행)}. 바이너리는 (None, None). 실패하면 None."""
-    raw = git(root, "diff", "--numstat", "-z", "--no-renames", base, "--", ".", f":(exclude){HANDOFF}")
+    raw = git(root, "diff", "--numstat", "-z", "--no-renames", base, *pathspec(excl))
     if raw is None:
         return None
     out = {}
@@ -322,26 +436,31 @@ def recorded_head(root, rh, mbase, s):
     return git(root, "rev-parse", "--verify", "-q", rh + "^{commit}")
 
 
-def state(root, is_git):
-    """git 2회 호출(status v2 + diff numstat)로 브랜치·HEAD·변경 항목·내용 다이제스트를 모은다."""
+def state(root, is_git, excl=None):
+    """git 2회 호출(status v2 + diff numstat)로 브랜치·HEAD·변경 항목·내용 다이제스트를 모은다.
+
+    excl 은 작업 트리 안에 있는 작업지시서 폴더의 상대 경로 — 그 아래 변경은 작업 내용으로 세지 않는다.
+    """
     if not is_git:
         return dict(is_git=False, branch="n/a", head="n/a", head_full="", dirty="n/a",
-                    worktree="n/a", status=[], base="", hashes=None, changed=None)
-    v2 = status_v2(root)
+                    worktree="n/a", status=[], base="", hashes=None, changed=None, excl=None)
+    v2 = status_v2(root, excl)
     if v2 is None:
         raise RuntimeError(tr("git status 실패 — 저장소 상태를 읽을 수 없음",
                               "git status failed — cannot read the repository state"))
     head_full, st = v2["oid"], v2["entries"]
     base = head_full or empty_tree(root)
-    changed = diff_numstat(root, base)
+    changed = diff_numstat(root, base, excl)
     hashes = file_hashes(root, changed, st)
     return dict(is_git=True, branch=v2["branch"], head=head_full[:7] if head_full else "none", head_full=head_full,
                 dirty="true" if st else "false", worktree=digest_of(hashes),
-                status=st, base=base, hashes=hashes, changed=changed)
+                status=st, base=base, hashes=hashes, changed=changed, excl=excl)
 
 
-def is_ignored(root):
-    return git(root, "check-ignore", "-q", "--no-index", f"{HANDOFF}/0000-00-00/.r1.files") is not None
+def tree_state(fm, root, is_git, store):
+    """(작업 트리, 그 트리의 state) — NAP 가 기록한 트리(tree_of)를 기준으로 모은다."""
+    wt = tree_of(fm, root) if is_git else root
+    return wt, state(wt, is_git, inside(store, wt))
 
 
 # ---------------------------------------------------------------- frontmatter
@@ -384,36 +503,61 @@ def read_nap(path):
 
 
 def nap_list(nd):
-    """handoff/ 바로 아래 날짜 폴더의 rN.md 를 (날짜, 번호) 순으로. archive 는 제외."""
+    """작업지시서 폴더 바로 아래 날짜 폴더의 HHMM….md 를 (날짜, 시각, 겹침 글자, 이름) 순으로. archive 는 제외."""
     found = []
     if nd.is_dir():
         for d in nd.iterdir():
             if d.is_dir() and DATE_DIR.match(d.name):
-                found += [(d.name, int(m.group(1)), f) for f in d.iterdir()
+                found += [(d.name, m.group(1), m.group(2), f.name, f) for f in d.iterdir()
                           if f.is_file() and (m := NAP_NAME.match(f.name))]
-    return [f for _, _, f in sorted(found)]
+    return [x[-1] for x in sorted(found, key=lambda x: x[:4])]
 
 
-def nap_path(arg, root):
-    """인자로 받은 경로, 없으면 최신 작업지시서. 작업지시서가 하나도 없으면 None."""
+def metas(nd):
+    """[(경로, frontmatter)] — nap_list 순서."""
+    return [(p, read_nap(p)[0]) for p in nap_list(nd)]
+
+
+def on_branch(ms, branch):
+    """branch 의 작업지시서. frontmatter 없이 직접 쓴 문서는 브랜치를 알 수 없어 함께 센다."""
+    return [(p, fm) for p, fm in ms if not fm or fm.get("branch") == branch]
+
+
+def nap_path(arg, root, store, branch=None):
+    """인자로 받은 경로, 없으면 branch 의 최신 작업지시서 — 그 브랜치에 없으면 전체 최신. 하나도 없으면 None."""
     if not arg:
-        naps = nap_list(root / HANDOFF)
-        return naps[-1] if naps else None
+        ms = metas(store)
+        pick = (on_branch(ms, branch) if branch else []) or ms
+        return pick[-1][0] if pick else None
     p = Path(arg).expanduser()
-    # 상대 경로는 --root 기준이 먼저다 — handoff/<날짜>/rN.md 는 저장소마다 겹쳐서, cwd 기준으로 풀면 다른 저장소의 파일을 고친다
-    if p.is_absolute() or (root / p).exists():
-        return root / p
+    if p.is_absolute():
+        return p
+    # 상대 경로는 --root(작업 트리) 기준이 먼저다 — 같은 상대 경로가 저장소마다 겹쳐서, cwd 기준으로 풀면 다른 저장소의
+    # 파일을 고친다. 워크트리에서는 본 트리 기준(.handoff/…)이나 폴더 기준(yyyy-mm-dd/…)으로 적은 경로도 받는다
+    for base in (root, store.parent, store):
+        if (base / p).exists():
+            return base / p
     return p if p.exists() else root / p
+
+
+def prev_path(prev, root, store):
+    """frontmatter 의 previous → 있는 파일, 없으면 None. 폴더의 부모 기준으로 적고, 0.1.x 판은 작업 트리 기준이었다."""
+    if not prev:
+        return None
+    for base in (store.parent, root):
+        if (base / prev).is_file():
+            return base / prev
+    return None
 
 
 # ---------------------------------------------------------------- 보관
 
-def sweep(root, folder):
-    """날짜 폴더에 살아 있는(active·resumed) NAP 가 없으면 폴더째 handoff/archive/ 로 옮긴다. 옮긴 경로, 아니면 None.
+def sweep(nd, folder):
+    """날짜 폴더에 살아 있는(active·resumed) NAP 가 없으면 폴더째 archive/ 로 옮긴다. 옮긴 경로, 아니면 None.
 
-    draft(끊긴 초안)와 frontmatter 없이 직접 쓴 rN.md 는 살아 있는 것으로 세지 않는다.
+    nd 는 작업지시서 폴더. draft(끊긴 초안)와 frontmatter 없이 직접 쓴 문서는 살아 있는 것으로 세지 않는다.
     """
-    nd, folder = root / HANDOFF, Path(folder)
+    folder = Path(folder)
     if not folder.is_dir() or folder.parent.resolve() != nd.resolve() or not DATE_DIR.match(folder.name):
         return None
     if any(read_nap(f)[0].get("status") in LIVE for f in folder.iterdir() if NAP_NAME.match(f.name)):
@@ -469,9 +613,12 @@ def drift(root, fm, s, nap=None):
             if full != s["head_full"]:
                 if git(root, "merge-base", "--is-ancestor", full, "HEAD") is not None:
                     n = git(root, "rev-list", "--count", f"{full}..HEAD") or "?"
-                    if git(root, "diff", "--name-only", full, "HEAD", "--", ".", f":(exclude){HANDOFF}") == "":
-                        notes.append(tr(f"기록 이후 커밋 {n}개는 {HANDOFF}/ 만 바꿈 (작업지시서 커밋)",
-                                        f"the {n} commit(s) since recording only touched {HANDOFF}/ (handoff doc commits)"))
+                    if git(root, "diff", "--name-only", full, "HEAD", *pathspec(s["excl"])) == "":
+                        notes.append(tr(f"기록 이후 커밋 {n}개는 {s['excl']}/ 만 바꿈 (작업지시서 커밋)",
+                                        f"the {n} commit(s) since recording only touched {s['excl']}/ (handoff doc commits)")
+                                     if s["excl"] else
+                                     tr(f"기록 이후 커밋 {n}개는 파일을 바꾸지 않음",
+                                        f"the {n} commit(s) since recording changed no files"))
                     else:
                         issues.append(tr(f"새 커밋 {n}개", f"{n} new commit(s)"))
                         details.append((tr("기록 이후 커밋", "Commits since recording"),
@@ -485,7 +632,7 @@ def drift(root, fm, s, nap=None):
                          f"manifest format v{mver} (current v{MANIFEST_VERSION}, hashing changed) — "
                          "run the prepare command with --refresh, then check again"))
     elif base and rw not in ("", "n/a", "unknown"):
-        changed_now = s["changed"] if base == s["base"] else diff_numstat(root, base)
+        changed_now = s["changed"] if base == s["base"] else diff_numstat(root, base, s["excl"])
         now = s["hashes"] if base == s["base"] else file_hashes(root, changed_now, s["status"])
         if digest_of(now) != rw:
             issues.append(tr("작업 내용 변경 (기록 시점과 파일 내용이 다름)",
@@ -509,24 +656,31 @@ def drift(root, fm, s, nap=None):
 
 # ---------------------------------------------------------------- snapshot
 
-def handoff_lines(root, is_git, s):
-    out = [f"### {HANDOFF}/"]
-    nd = root / HANDOFF
-    if is_git:
-        out.append(tr("- 해시 기록 파일 로컬 무시: ", "- Manifest files ignored locally: ")
-                   + (tr("됨", "yes") if is_ignored(root)
-                      else tr("안 됨 (준비 명령이 .git/info/exclude에 등록)", "no (the prepare command adds them to .git/info/exclude)")))
-    if not nd.is_dir():
+def handoff_lines(root, is_git, s, store, default):
+    out = ["### handoff"]
+    mode = (tr("로컬 전용 — 폴더 안 .gitignore 로 git 이 무시", "local only — ignored by git through its own .gitignore")
+            if default else tr("HANDOFF_DIR 로 지정", "set by HANDOFF_DIR"))
+    out.append(tr("- 폴더: ", "- Folder: ") + f"{rel(store, root)} ({mode})")
+    if not store.is_dir():
         out.append(tr("- 아직 없음 (첫 사용)", "- Not created yet (first use)"))
         return out
-    foreign = sorted(p.name for p in nd.iterdir()
+    if default and not (store / ".gitignore").exists():
+        out.append(tr("- ⚠ .gitignore 없음 — 작업지시서가 git status 에 보일 수 있음 (준비 명령이 다시 만듦)",
+                      "- ⚠ .gitignore missing — handoff docs may show up in git status (the prepare command recreates it)"))
+    foreign = sorted(p.name for p in store.iterdir()
                      if p.name != ARC and not p.name.startswith(".") and not (p.is_dir() and DATE_DIR.match(p.name)))
     if foreign:
         out.append(tr(f"- ⚠ 날짜 폴더 외 항목 있음: {', '.join(foreign[:5])} — 폴더 이름 충돌 가능",
                       f"- ⚠ Entries other than date folders: {', '.join(foreign[:5])} — folder names may collide"))
-    naps = nap_list(nd)
-    if naps:
-        cur = naps[-1]
+    ms = metas(store)
+    mine = on_branch(ms, s["branch"])
+    # 다른 브랜치의 살아 있는 NAP — 워크트리들이 폴더를 같이 쓰므로 본 트리에서 연 세션도 여기서 찾는다
+    others = [(p, f) for p, f in ms if f and f.get("branch") != s["branch"] and f.get("status") in LIVE]
+    if ms and not mine:
+        out.append(tr(f"- 현재 브랜치({s['branch']})의 작업지시서: 없음",
+                      f"- Handoff docs on the current branch ({s['branch']}): none"))
+    if mine:
+        cur = mine[-1][0]
         fm, body = read_nap(cur)[:2]
         if not fm:
             head = next((l[2:].strip() for l in body.split("\n") if l.startswith("# ")), "?")
@@ -545,30 +699,37 @@ def handoff_lines(root, is_git, s):
                           f"Previous NAP: {fm.get('previous') or 'none'} "
                           "(resume from that path, or finish the draft and promote it with the check command)"))
         elif fm.get("status") in LIVE:
-            out.append(tr("- 드리프트: ", "- Drift: ") + drift(root, fm, s, cur)[0])
+            wt, ws = tree_state(fm, root, is_git, store) if tree_of(fm, root) != root else (root, s)
+            out.append(tr("- 드리프트: ", "- Drift: ") + drift(wt, fm, ws, cur)[0])
         if is_git:
-            live = []
-            for p in naps[:-1]:
-                f = read_nap(p)[0]
-                if f.get("status") in LIVE and f.get("branch") == s["branch"]:
-                    live.append(p)
+            live = [p for p, f in mine[:-1] if f.get("status") in LIVE]
             if live:
                 out.append(tr(f"- 현재 브랜치({s['branch']})의 다른 활성 NAP: ",
                               f"- Other active NAPs on the current branch ({s['branch']}): ")
                            + ", ".join(rel(p, root) for p in live[-3:]))
-    else:
+    if others:
+        def where(f):
+            t = f.get("tree", "")
+            if not t or Path(t).resolve() == root:
+                return ""
+            return tr(" · 트리 ", " · tree ") + Path(t).as_posix() + ("" if Path(t).is_dir() else tr(" (없음)", " (missing)"))
+        out.append(tr("- 다른 브랜치의 활성 NAP (최근순): ", "- Active NAPs on other branches (newest first): ")
+                   + ", ".join(f"{rel(p, root)} ({f.get('branch', '?')}{where(f)})" for p, f in reversed(others[-3:])))
+    if not ms:
         out.append(tr("- 작업지시서: 없음", "- Handoff docs: none"))
-    if (nd / ARC).is_dir():
-        n = sum(1 for p in (nd / ARC).iterdir() if p.is_dir())
+    if (store / ARC).is_dir():
+        n = sum(1 for p in (store / ARC).iterdir() if p.is_dir())
         if n:
-            out.append(tr(f"- 보관: 날짜 폴더 {n}개 ({HANDOFF}/{ARC}/)", f"- Archive: {n} date folder(s) ({HANDOFF}/{ARC}/)"))
+            out.append(tr(f"- 보관: 날짜 폴더 {n}개 ({rel(store / ARC, root)}/)",
+                          f"- Archive: {n} date folder(s) ({rel(store / ARC, root)}/)"))
     return out
 
 
 def cmd_snapshot(a):
     try:
         root, is_git = resolve_root(a.root)
-        s = state(root, is_git)
+        store, default = store_dir(root, is_git)
+        s = state(root, is_git, inside(store, root))
         out = ["### git"]
         if not is_git:
             out.append(tr(f"- git 저장소가 아님 ({root}) — 드리프트 확인 불가, 파일 상태를 직접 기록할 것",
@@ -596,7 +757,7 @@ def cmd_snapshot(a):
                 out.append(tr("- 최근 커밋:", "- Recent commits:"))
                 out += [f"  {x}" for x in log.splitlines()]
             out.append(f"- worktree: {s['worktree']}")
-        out += handoff_lines(root, is_git, s)
+        out += handoff_lines(root, is_git, s, store, default)
         print("\n".join(out))
     except Exception as e:  # 스냅샷 실패가 스킬 전체를 막지 않도록
         print(tr(f"(스냅샷 수집 실패: {type(e).__name__}: {e}) — git status로 직접 확인할 것",
@@ -608,28 +769,17 @@ def cmd_snapshot(a):
 
 def cmd_prepare(a):
     root, is_git = resolve_root(a.root)
-    nd = root / HANDOFF
-    nd.mkdir(parents=True, exist_ok=True)
-    msgs = [f"- {HANDOFF}/: {nd}"]
-    if is_git:
-        if is_ignored(root):
-            msgs.append(tr("- 해시 기록 파일 로컬 무시: 이미 됨", "- Manifest files ignored locally: already"))
-        else:
-            excl = Path(git(root, "rev-parse", "--git-path", "info/exclude") or ".git/info/exclude")
-            excl = excl if excl.is_absolute() else root / excl
-            excl.parent.mkdir(parents=True, exist_ok=True)
-            prev = excl.read_text("utf-8", "replace") if excl.exists() else ""
-            with excl.open("a", encoding="utf-8") as f:
-                f.write(("\n" if prev and not prev.endswith("\n") else "") + f"{MANIFEST_IGNORE}\n")
-            ok = is_ignored(root)
-            msgs.append(tr(f"- 해시 기록 파일 로컬 무시: {excl}에 {MANIFEST_IGNORE} 추가 (작업지시서 rN.md 는 커밋 대상)",
-                           f"- Manifest files ignored locally: added {MANIFEST_IGNORE} to {excl} "
-                           "(handoff docs rN.md are meant to be committed)")
-                        + ("" if ok else tr(" ⚠ 그래도 무시되지 않음 — .gitignore의 ! 패턴 확인",
-                                            " ⚠ still not ignored — check for ! patterns in .gitignore")))
-    s = state(root, is_git)
-    naps = nap_list(nd)
-    cur = naps[-1] if naps else None
+    store, default = store_dir(root, is_git)
+    made = ensure_store(store, default)
+    mode = (tr("로컬 전용 — 폴더 안 .gitignore 로 git 이 무시", "local only — ignored by git through its own .gitignore")
+            if default else tr("HANDOFF_DIR 로 지정 — 해시 기록 파일만 .gitignore 로 무시",
+                               "set by HANDOFF_DIR — only the hash record files are ignored through .gitignore"))
+    msgs = [tr("- 폴더: ", "- Folder: ") + f"{rel(store, root)} ({mode})"
+            + (tr(" · .gitignore 만듦", " · created .gitignore") if made else "")]
+    s = state(root, is_git, inside(store, root))
+    ms = metas(store)
+    mine = on_branch(ms, s["branch"])
+    cur = mine[-1][0] if mine else None
     if a.refresh:
         if cur is None:
             print(tr("갱신할 작업지시서가 없음 — --refresh 없이 실행할 것", "No handoff doc to refresh — run without --refresh"))
@@ -637,6 +787,8 @@ def cmd_prepare(a):
         text = cur.read_text("utf-8", "replace")
         for k in ("branch", "head", "dirty", "worktree"):
             text = set_fm(text, k, s[k])
+        if is_git:
+            text = set_fm(text, "tree", root.as_posix())
         save(cur, text)
         if is_git:
             write_manifest(cur, s["base"], s["hashes"])
@@ -658,20 +810,19 @@ def cmd_prepare(a):
                      "If this is a new session, check whether `/handoff resume` is what you want instead of write mode. "
                      "If the session only added knowledge without file changes (research, etc.), proceed with --force"))
             return 1
-    day = nd / dt.date.today().isoformat()
+    now = dt.datetime.now()
+    day = store / now.date().isoformat()
     day.mkdir(exist_ok=True)
-    nums = [int(m.group(1)) for f in day.iterdir() if (m := NAP_NAME.match(f.name))]
-    new = day / f"r{max(nums, default=0) + 1}.md"
-    # 끊긴 초안은 건너뛰고 그 초안의 previous 를 잇는다 — 초안은 인수인계로 유효한 적이 없다
-    previous = fm.get("previous", "") if fm.get("status") == DRAFT else (rel(cur, root) if cur else "")
+    # 끊긴 초안은 건너뛰고 그 초안의 previous 를 잇는다 — 초안은 인수인계로 유효한 적이 없다.
+    # previous 는 폴더의 부모(기본은 본 작업 트리) 기준 — 어느 워크트리에서 읽어도 같은 파일을 가리킨다
+    previous = fm.get("previous", "") if fm.get("status") == DRAFT else (rel(cur, store.parent) if cur else "")
+    others = [p for p, f in ms if f and f.get("branch") != s["branch"] and f.get("status") in LIVE]
     note = ""
-    if fm.get("status") in LIVE and is_git and fm.get("branch") not in ("", s["branch"]):
-        note = tr(f"다른 브랜치({fm.get('branch')})의 활성 NAP {rel(cur, root)} 는 상태를 유지함 — "
-                  f"그 브랜치에서 /handoff resume {rel(cur, root)} 로 이어갈 수 있음",
-                  f"the active NAP {rel(cur, root)} on another branch ({fm.get('branch')}) keeps its status — "
-                  f"continue it on that branch with /handoff resume {rel(cur, root)}")
-    if is_git:
-        write_manifest(new, s["base"], s["hashes"])
+    if others:
+        note = tr(f"다른 브랜치의 활성 NAP {len(others)}개는 상태를 유지함 — 그 브랜치에서 /handoff resume <경로> 로 "
+                  f"이어갈 수 있음 (최근: {rel(others[-1], root)})",
+                  f"{len(others)} active NAP(s) on other branches keep their status — continue one on its branch with "
+                  f"/handoff resume <path> (latest: {rel(others[-1], root)})")
     session = (a.session or "").strip()
     if "${" in session:
         session = ""
@@ -683,22 +834,38 @@ def cmd_prepare(a):
         f"title: {tfm.get('title', '')}",
         "kind: implementation        # implementation | research",
         f"status: {DRAFT}",
-        f"created: {now_iso()}",
+        f"created: {now_iso(now)}",
         "reason: context             # context | switch | end-of-day | blocked",
         f"branch: {s['branch']}",
         f"head: {s['head']}",
         f"dirty: {s['dirty']}",
         f"worktree: {s['worktree']}",
+        f"tree: {root.as_posix() if is_git else 'n/a'}",
         f"session: {session}",
         f"previous: {previous}",
         "---",
     ]
-    # 초안을 바로 디스크에 둔다 — 작성이 끊겨도 "미완성 인수인계"와 previous 가 파일로 남는다
-    save(new, "\n".join(fm_lines) + "\n" + body)
+    # 초안을 바로 디스크에 둔다 — 작성이 끊겨도 "미완성 인수인계"와 previous 가 파일로 남는다.
+    # 이름은 HHMM-<브랜치>.md. 같은 이름이 있으면 b, c … 를 붙이고, 'x' 로 열어 동시에 쓰는 다른 세션과 같은 파일을 잡지 않는다
+    slug = slug_of(s["branch"]) if is_git else ""
+    text = "\n".join(fm_lines) + "\n" + body
+    for c in ("",) + tuple("bcdefghijklmnopqrstuvwxyz"):
+        new = day / (f"{now:%H%M}{c}" + (f"-{slug}" if slug else "") + ".md")
+        try:
+            with new.open("x", encoding="utf-8", newline="\n") as f:
+                f.write(text)
+            break
+        except FileExistsError:
+            continue
+    else:
+        raise RuntimeError(tr("같은 분에 같은 이름의 초안이 너무 많음 — 1분 뒤 다시 실행할 것",
+                              "too many drafts with the same name in the same minute — run again in a minute"))
+    if is_git:
+        write_manifest(new, s["base"], s["hashes"])
     if cur:
         st_prev = fm.get("status") or tr("frontmatter 없음", "no frontmatter")
         tail = tr(" — 새 NAP 가 검사를 통과하면 superseded 로 바뀜",
-                  " — becomes superseded when the new NAP passes check") if st_prev in LIVE and not note else ""
+                  " — becomes superseded when the new NAP passes check") if st_prev in LIVE else ""
         msgs.append(tr("- 직전 작업지시서: ", "- Previous handoff doc: ") + f"{rel(cur, root)} ({st_prev}{tail})")
     if note:
         msgs.append(tr(f"- 주의: {note}", f"- Note: {note}"))
@@ -790,11 +957,18 @@ def candidate_path(tok):
     return None
 
 
+def no_nap(path, store, root):
+    """작업지시서를 찾지 못했을 때의 안내."""
+    where = rel(store, root)
+    return tr(f"NAP 없음: {path or where + '/ 에 작업지시서가 없음'}", f"No NAP: {path or where + '/ has no handoff doc'}")
+
+
 def cmd_check(a):
     root, is_git = resolve_root(a.root)
-    path = nap_path(a.file, root)
+    store, _ = store_dir(root, is_git)
+    path = nap_path(a.file, root, store, None if a.file else cur_branch(root, is_git))
     if path is None or not path.exists():
-        print(tr(f"NAP 없음: {path or HANDOFF + '/ 에 작업지시서가 없음'}", f"No NAP: {path or HANDOFF + '/ has no handoff doc'}"))
+        print(no_nap(path, store, root))
         return 1
     fm, body, text, m = read_nap(path)
     errors, warns = [], []
@@ -830,8 +1004,8 @@ def cmd_check(a):
                 errors.append(tr(f"[미작성] {no}행: 템플릿 자리표시자 {h} 가 남아 있음",
                                  f"[unfilled] line {no}: template placeholder {h} is still there"))
 
-    # 기록 상태 = 현재 상태 (작성 직후 검사이므로 초안과 살아 있는 NAP만)
-    s = state(root, True) if is_git else None
+    # 기록 상태 = 현재 상태 (작성 직후 검사이므로 초안과 살아 있는 NAP만). 기록한 작업 트리를 기준으로 본다
+    wt, s = tree_state(fm, root, is_git, store) if is_git else (root, None)
     if s and fm.get("status") in LIVE + (DRAFT,):
         mbase, _, mver = read_manifest(path)
         stale_manifest = mver is not None and mver != MANIFEST_VERSION
@@ -848,7 +1022,7 @@ def cmd_check(a):
             if s["head_full"]:
                 errors.append(tr("[상태] head none인데 현재 커밋이 있음", "[state] head is none but there are commits now"))
         elif rh:
-            if recorded_head(root, rh, mbase, s) != s["head_full"]:
+            if recorded_head(wt, rh, mbase, s) != s["head_full"]:
                 errors.append(tr(f"[상태] head {rh} ≠ 현재 {s['head']}", f"[state] head {rh} ≠ current {s['head']}"))
         if fm.get("dirty") and fm["dirty"] != s["dirty"]:
             errors.append(tr(f"[상태] dirty {fm['dirty']} ≠ 현재 {s['dirty']}",
@@ -911,10 +1085,10 @@ def cmd_check(a):
                         f"[length] {len(lines)} lines · {len(text)} chars — cut to 1–2 pages"))
 
     # 줄 단위 검사: 시크릿 · 맥락 의존 표현 · 경로
-    env_vals = local_secrets(root)
+    env_vals = local_secrets(wt)
     known = set()
     if s:
-        known = {Path(p).name for p in (git(root, "ls-files", "-z") or "").split("\0") if p}
+        known = {Path(p).name for p in (git(wt, "ls-files", "-z") or "").split("\0") if p}
         known |= {Path(p).name for xy, p in s["status"]}
     seen = set()
     for no, line in enumerate(lines, 1):
@@ -938,28 +1112,29 @@ def cmd_check(a):
             if not c or c in seen:
                 continue
             seen.add(c)
-            p = Path(c) if c.startswith("/") else root / c
-            if p.exists() or ("/" not in c and c in known):
+            p = Path(c) if c.startswith("/") else wt / c
+            # 작업지시서 폴더 안 경로(.handoff/… previous 등)는 워크트리에서 쓴 문서라도 본 트리 기준으로 있다
+            if p.exists() or (store.parent / c).exists() or ("/" not in c and c in known):
                 continue
-            if is_git and "/" in c and git(root, "rev-parse", "--verify", "-q", c) is not None:
+            if is_git and "/" in c and git(wt, "rev-parse", "--verify", "-q", c) is not None:
                 continue  # 브랜치 등 ref
             warns.append(tr(f"[경로] {no}행: `{c}` 없음 — 새로 만들 파일이 아니면 경로 확인",
                             f"[path] line {no}: `{c}` not found — check the path unless it is a file still to be created"))
 
-    # 통과한 handoff/ 의 작업지시서는 여기서 비로소 "살아 있는" NAP 가 된다: draft → active, 이전 NAP → superseded
+    # 통과한 작업지시서 폴더의 문서는 여기서 비로소 "살아 있는" NAP 가 된다: draft → active, 이전 NAP → superseded
     promoted = []
-    if not errors and path.resolve() in {p.resolve() for p in nap_list(root / HANDOFF)}:
+    if not errors and path.resolve() in {p.resolve() for p in nap_list(store)}:
         if fm.get("status") == DRAFT:
             save(path, set_fm(text, "status", "active"))
             promoted.append("status draft → active")
         prev = fm.get("previous", "")
-        pp = root / prev if prev else None
-        if pp is not None and pp.is_file():
+        pp = prev_path(prev, root, store)
+        if pp is not None:
             pfm, _, ptext, _ = read_nap(pp)
             if pfm.get("status") in LIVE and pfm.get("branch") == fm.get("branch"):
                 save(pp, set_fm(ptext, "status", "superseded"))
                 promoted.append(tr(f"이전 NAP superseded: {prev}", f"previous NAP superseded: {prev}"))
-            moved = sweep(root, pp.parent)
+            moved = sweep(store, pp.parent)
             if moved:
                 promoted.append(tr(f"보관: {rel(moved, root)}", f"archived: {rel(moved, root)}"))
 
@@ -981,15 +1156,22 @@ def cmd_check(a):
 
 def cmd_drift(a):
     root, is_git = resolve_root(a.root)
-    path = nap_path(a.file, root)
+    store, _ = store_dir(root, is_git)
+    path = nap_path(a.file, root, store, None if a.file else cur_branch(root, is_git))
     if path is None or not path.exists():
-        print(tr(f"NAP 없음: {path or HANDOFF + '/ 에 작업지시서가 없음'}", f"No NAP: {path or HANDOFF + '/ has no handoff doc'}"))
+        print(no_nap(path, store, root))
         return 2
     fm = read_nap(path)[0]
-    s = state(root, is_git)
-    verdict, details = drift(root, fm, s, path)
+    wt, s = tree_state(fm, root, is_git, store)
+    verdict, details = drift(wt, fm, s, path)
     print(f"NAP: {rel(path, root)} — " + tr("기록 ", "recorded ")
           + f"{fm.get('branch', '?')} @ {fm.get('head', '?')} ({fm.get('created', '?')})")
+    t = fm.get("tree", "")
+    if wt != root:
+        print(tr("작업 트리: ", "Working tree: ") + wt.as_posix())
+    elif is_git and t and t != "n/a" and not Path(t).is_dir():
+        print(tr(f"기록된 작업 트리 {t} 가 없어 현재 트리 기준으로 판정",
+                 f"The recorded working tree {t} is gone — judged against the current tree"))
     print(tr("현재: ", "Now: ") + f"{s['branch']} @ {s['head']}")
     print(tr("판정: ", "Verdict: ") + verdict)
     for title, content in details:
@@ -999,10 +1181,11 @@ def cmd_drift(a):
 
 
 def cmd_mark(a):
-    root, _ = resolve_root(a.root)
-    path = nap_path(a.file, root)
+    root, is_git = resolve_root(a.root)
+    store, _ = store_dir(root, is_git)
+    path = nap_path(a.file, root, store, None if a.file else cur_branch(root, is_git))
     if path is None or not path.exists():
-        print(tr(f"NAP 없음: {path or HANDOFF + '/ 에 작업지시서가 없음'}", f"No NAP: {path or HANDOFF + '/ has no handoff doc'}"))
+        print(no_nap(path, store, root))
         return 1
     fm, _, text, _ = read_nap(path)
     if fm.get("status") == DRAFT:
@@ -1017,7 +1200,7 @@ def cmd_mark(a):
     save(path, text)
     print(tr(f"상태 변경: {rel(path, root)} → {a.status}", f"Status changed: {rel(path, root)} → {a.status}"))
     if a.status == "done":
-        moved = sweep(root, path.parent)
+        moved = sweep(store, path.parent)
         if moved:
             print(tr(f"보관: 날짜 폴더에 살아 있는 NAP 가 없어 {rel(moved, root)} 로 옮김",
                      f"Archived: no live NAP left in the date folder; moved to {rel(moved, root)}"))
@@ -1051,7 +1234,8 @@ def main(argv=None):
     p = add("prepare")
     p.add_argument("--session", nargs="?", default="", const="")
     p.add_argument("--refresh", action="store_true", help=tr(
-        "새 번호 없이 최신 작업지시서의 기계 필드만 갱신", "refresh only the latest handoff doc's machine fields, no new number"))
+        "새 파일 없이 현재 브랜치의 최신 작업지시서 기계 필드만 갱신",
+        "refresh only the machine fields of the latest handoff doc on the current branch, no new file"))
     p.add_argument("--force", action="store_true", help=tr(
         "활성 NAP 에 변화가 없어도 새 NAP 를 준비", "prepare a new NAP even if the active NAP has no changes"))
     add("check").add_argument("file", nargs="?")

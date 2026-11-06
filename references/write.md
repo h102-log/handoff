@@ -15,8 +15,8 @@ to do next).
 ## 2. Gather the facts
 
 - Use the snapshot at the top of SKILL.md as the baseline. Do not write git state from memory.
-- Check the snapshot's latest handoff doc. If it is an active NAP from another branch, it may be parallel work, so tell
-  the user. The new NAP gets the next number and the existing file stays as it is.
+- Check the snapshot's handoff entry. Active NAPs on other branches may be parallel work (worktrees share the folder),
+  so tell the user about them. The new NAP is a new file and existing files stay as they are.
 - Write down only test and build results actually confirmed in this conversation, together with when they were checked
   and "not re-run". Re-running them is only for quick commands, and only when the user wants it.
 - If you were using a Todo list, reflect its progress.
@@ -50,14 +50,15 @@ corrected version, and move the wrong approach to "Do not".
 
 ## 5. Record
 
-1. Run the prepare command. It creates a **draft `handoff/yyyy-mm-dd/rN.md` (status: draft)** with the next number in
-   today's date folder, machine fields filled in, and prints its path ("Draft created:"; Korean "초안 생성:") and frontmatter.
-   Hand-written rN.md files count toward the numbering too. From here on, fill in this path.
+1. Run the prepare command in the working tree you worked in (if you worked in a worktree, from that worktree). It
+   creates a **draft `.handoff/yyyy-mm-dd/HHMM-<branch>.md` (status: draft)** in today's date folder, machine fields
+   filled in, and prints its path ("Draft created:"; Korean "초안 생성:") and frontmatter. In a worktree the path is
+   absolute, because the folder lives in the main working tree. From here on, fill in this path.
    If it stops with "Nothing to hand off" ("인수인계할 변화 없음"), confirm with the user whether resume mode is the right
    one. If the session only gained knowledge without file changes (research, etc.), proceed with the prepare (force)
    command (`--force`).
-2. Do not change a single character of the printed machine fields (created, branch, head, dirty, worktree, session,
-   previous) or `status: draft`. They are the baseline for the drift verdict on resume, and the script raises status to
+2. Do not change a single character of the printed machine fields (created, branch, head, dirty, worktree, tree,
+   session, previous) or `status: draft`. They are the baseline for the drift verdict on resume, and the script raises status to
    active when check passes. Fill in only title, kind and reason.
 3. Fill in the draft following the template structure (overwriting it whole with Write or filling it in with Edit are
    both fine).
@@ -78,12 +79,12 @@ corrected version, and move the wrong approach to "Do not".
 1. Run the check command. Fix every error; judge each warning one by one and either fix it or leave the reason for
    keeping it in the report. Re-run after fixing. When it passes, the script promotes it `draft → active` and changes
    the previous NAP to superseded — from this point the NAP on disk is valid as the handoff. If no live NAP remains in
-   the previous NAP's date folder, that folder is moved to `handoff/archive/` (the "archived:" item; Korean "보관:").
+   the previous NAP's date folder, that folder is moved to `.handoff/archive/` (the "archived:" item; Korean "보관:").
 2. Do the cold read **only once**; skip it for a lite write (`lite`). Hand it to a read-only subagent that knows nothing
    of this conversation (`subagent_type: Explore`) with the instructions below. The result is kept short so that the
    main context does not grow.
 
-   > Read only `handoff/yyyy-mm-dd/rN.md` (replace with the actual path the prepare command printed). Only read the file; never modify it. Answer only with a list of
+   > Read only `.handoff/yyyy-mm-dd/HHMM-<branch>.md` (replace with the actual path the prepare command printed). Only read the file; never modify it. Answer only with a list of
    > at most 10 lines of problems that would keep someone from starting the 'first action' right away with this document
    > alone (undefined pronouns or terms, missing paths or commands, contradictory content, claims without evidence).
    > If there are no problems, answer only "none". You may answer in the document's language.
@@ -101,5 +102,5 @@ Keep it short.
 - Check result, and the reason for any warnings left in place
 - Cold read: m of n issues applied, k turned into ⚠️ (or the fact that it was skipped)
 - How to start the next session: `/clear` → plan mode → `/handoff resume`
-- If a commit seems needed, only propose it. The handoff doc (rN.md) and folders moved to archive are also things to
-  commit.
+- If a commit seems needed, only propose it. The handoff doc itself is not committed (unless `HANDOFF_DIR` points into
+  the repository).

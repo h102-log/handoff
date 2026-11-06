@@ -81,9 +81,13 @@ install_skill() {  # <저장소> — Case 4 에만 이 저장소 판을 프로�
     mkdir -p "$s" && cp -r "$SKILL_DIR"/{SKILL.md,scripts,references,assets} "$s/"
     echo "/.claude/" >> "$1/.git/info/exclude"   # 스킬 파일이 작업 트리 변경·worktree 해시에 잡히지 않게
 }
-save_doc() {  # <채점 폴더> <저장소> — 작성 단계의 문서를 드리프트 전에 채점 폴더로 복사
-    local nap="$2/handoff/$TODAY/r1.md"
-    if [ -f "$nap" ]; then cp "$nap" "$1/doc.md"; else echo "(파일 미생성)" > "$1/doc.md"; fi
+save_doc() {  # <채점 폴더> <NAP 경로> — 작성 단계의 문서를 드리프트 전에 채점 폴더로 복사
+    local nap="$2"
+    if [ -n "$nap" ] && [ -f "$nap" ]; then cp "$nap" "$1/doc.md"; else echo "(파일 미생성)" > "$1/doc.md"; fi
+}
+nap_of() {  # <저장소> — /handoff 가 오늘 만든 작업지시서 중 가장 최근 것 (이름이 HHMM-<브랜치>.md 라 이름순이 시간순)
+    # LC_ALL=C — 로캘 정렬은 '-' 를 건너뛰어 1432b-… 를 1432-… 앞에 둘 수 있다
+    LC_ALL=C ls "$1/.handoff/$TODAY/"[0-9]*.md 2>/dev/null | tail -1
 }
 resume_case() {  # <채점 폴더> <저장소> <프롬프트> [추가 인자…] — 세션 밖 드리프트를 일으킨 뒤 재개
     local d="$1" w="$2" prompt="$3"; shift 3
@@ -94,7 +98,7 @@ resume_case() {  # <채점 폴더> <저장소> <프롬프트> [추가 인자…]
 }
 
 run_round() {  # <라운드 번호>
-    local r="$1" d w u
+    local r="$1" d w u n
 
     # CASE 1: 인수인계 문서 없이 새 세션에서 재개 (기준선)
     d="$G/r$r/case1"; mkdir -p "$d"; w="$(setup_case $((r * 10 + 1)))"
@@ -115,7 +119,7 @@ run_round() {  # <라운드 번호>
     claude_run "$w" "$d/ctx.jsonl" "$WT" "$CTX" --session-id "$u" "${NOSKILL[@]}"
     claude_run "$w" "$d/write.jsonl" "$WT" "내일은 cap부터 하고 jitter는 full jitter로 할 예정이다. /clear 후 다음 세션에서 이어서 할 수 있도록 handoff/$TODAY/r1.md 에 상세한 다음 작업지시서를 작성해라." \
         --resume "$u" "${NOSKILL[@]}"
-    save_doc "$d" "$w"
+    save_doc "$d" "$w/handoff/$TODAY/r1.md"
     resume_case "$d" "$w" "새 세션이다. handoff/$TODAY/r1.md 작업지시서를 읽고 작업을 재개하기 위한 상태 확인 및 실행 계획을 세워줘. 아직 파일은 수정하지 마." \
         "${NOSKILL[@]}" --no-session-persistence
 
@@ -123,11 +127,11 @@ run_round() {  # <라운드 번호>
     d="$G/r$r/case4"; mkdir -p "$d"; w="$(setup_case $((r * 10 + 4)))"; install_skill "$w"; u="$(uuid)"
     claude_run "$w" "$d/ctx.jsonl" "$WT" "$CTX" --session-id "$u"
     claude_run "$w" "$d/write.jsonl" "$WT" "/handoff 내일은 cap부터 하고 jitter는 full jitter로" --resume "$u"
-    save_doc "$d" "$w"
-    python3 "$NAP_PY" check "$w/handoff/$TODAY/r1.md" --root "$w" > "$d/check.txt" 2>&1 || true
+    n="$(nap_of "$w")"; save_doc "$d" "$n"
+    python3 "$NAP_PY" check "$n" --root "$w" > "$d/check.txt" 2>&1 || true
     resume_case "$d" "$w" "/handoff resume" --no-session-persistence
-    python3 "$NAP_PY" drift "$w/handoff/$TODAY/r1.md" --root "$w" > "$d/drift.txt" 2>&1 || true
-    { grep '^status:' "$w/handoff/$TODAY/r1.md" 2>/dev/null || echo 'status: none'
+    python3 "$NAP_PY" drift "$n" --root "$w" > "$d/drift.txt" 2>&1 || true
+    { grep '^status:' "$n" 2>/dev/null || echo 'status: none'
       grep '^판정:' "$d/drift.txt" || echo '판정: N/A'; } > "$d/post_state.txt"
 }
 

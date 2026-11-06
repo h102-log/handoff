@@ -13,7 +13,7 @@ and `/compact` keeps them only as a summary inside the same session. handoff wri
 repository, has a script check that file, and makes the next session check it against the code before acting on it.
 
 - **Write mode**: collects a snapshot of the current git state and writes what only this session knows (decisions and
-  their rationale, approaches that failed, the next first action) to `handoff/yyyy-mm-dd/rN.md`. A check script catches
+  their rationale, approaches that failed, the next first action) to `.handoff/yyyy-mm-dd/HHMM-<branch>.md`. A check script catches
   leftover placeholders, leaked secrets and changes made after the document was written.
 - **Resume mode**: reads the latest NAP, re-checks whether the code changed after it was written (drift) and re-verifies
   the document's assumptions, then shows a plan starting from the first action and continues once you approve.
@@ -62,7 +62,8 @@ To use it in one project only, clone it into that project's `.claude/skills/hand
 - **Low on context, but continuing in the same session**: `/compact` is enough. In the runs below, `/compact` scored
   slightly higher on resuming, because the same session carries on.
 - **After `/clear`, the next day, or when someone else picks the work up**: `/handoff`. The NAP is a file in the
-  repository, checked by a script when it is written and checked against the code when it is resumed.
+  repository folder (kept out of git unless you [set `HANDOFF_DIR`](#where-naps-are-kept)), checked by a script when
+  it is written and checked against the code when it is resumed.
 - **`claude --continue` / `--resume`** reopen the previous conversation as it was. That works if it still had room, but
   it brings the old context back as it was (a nearly full one stays nearly full), and nobody else can read it.
 - **Asking for a handoff doc in plain words** gets you most of the way: in the runs below, those docs passed 5 of the 6
@@ -167,7 +168,8 @@ compaction summary is graded as the handoff doc.
 1. **Stop at a safe point.** An edit in progress is finished only up to a point where the code still runs. No new work
    is started.
 2. **Snapshot.** `scripts/nap.sh` records the branch, HEAD, uncommitted changes and a hash of each changed file, and
-   creates a draft `handoff/yyyy-mm-dd/rN.md` with those fields already filled in.
+   creates a draft `.handoff/yyyy-mm-dd/HHMM-<branch>.md` (time and branch of the handoff) with those fields already
+   filled in.
 3. **Distill.** Claude writes down what only this session knows: decisions and rejected alternatives, dead ends, open
    questions and your note. Every factual claim is tagged ✅ verified (with the evidence) or ⚠️ assumed (with how to
    recheck it). The first action is one concrete step: `file:line`, what to do there, and the command to run.
@@ -189,7 +191,7 @@ compaction summary is graded as the handoff doc.
    `backoff.py`, committed as it was, is not listed as changed.
 
    ```text
-   NAP: handoff/2026-11-03/r1.md — recorded feat/webhook-retry @ a73cb53 (2026-11-03T10:08+09:00)
+   NAP: .handoff/2026-11-03/1008-feat-webhook-retry.md — recorded feat/webhook-retry @ a73cb53 (2026-11-03T10:08+09:00)
    Now: feat/webhook-retry @ 6ad82da
    Verdict: DRIFT — 1 new commit(s); work content changed (file contents differ from record time)
 
@@ -205,14 +207,14 @@ compaction summary is graded as the handoff doc.
 4. **Plan, then wait.** Claude shows a short summary, the drift and re-verification results, the plan starting from the
    first action, and the open questions, then waits for your approval. Steps 1–4 are read-only.
 5. **Execute.** The NAP is marked `resumed` before the first edit and `done` once its done criteria are met. A date
-   folder with no live NAP left is moved to `handoff/archive/`. If you have to stop again midway, `/handoff` writes the
+   folder with no live NAP left is moved to `.handoff/archive/`. If you have to stop again midway, `/handoff` writes the
    next NAP, which supersedes this one.
 
 ### What a NAP contains
 
 | Section | Contents |
 |---|---|
-| Frontmatter | Title, kind, status, reason, and machine fields filled in by the script (created, branch, HEAD, worktree hash, session, previous NAP) |
+| Frontmatter | Title, kind, status, reason, and machine fields filled in by the script (created, branch, HEAD, worktree hash, working tree path, session, previous NAP) |
 | 0. TL;DR | Goal, where it stopped, ▶ first action, your note |
 | 1. Done criteria | Verification commands and their expected results |
 | 2. State snapshot | Uncommitted changes, recent commits, the last test result and when it ran, environment (variable names only) |
@@ -229,23 +231,39 @@ Sections with nothing to say are deleted; 0, 1, 2, 6 and 9 always stay. A full e
 
 ### What it changes in your repository
 
-The skill never changes git state. Committing the NAP is up to you; the only thing it adds to `.git/info/exclude` is
-the hash record files used for drift detection (`.rN.files`). NAPs get committed and shared, so secrets are written as
-variable names only, and the check script looks for token- or key-shaped values and for secret values from `.env*`
-files at the repository root and `config*.json` files (up to two folders deep) copied into the document.
+The skill never changes git state. NAPs go into `.handoff/` in the repository's main working tree, and the `.gitignore`
+(`*`) the script creates inside it keeps the whole folder out of git: there is nothing to commit, and neither your
+`.gitignore` nor `.git/info/exclude` is touched. The repository's worktrees share this one folder, so a session opened
+in the main tree also sees NAPs written in a worktree; each NAP records the working tree it was written in (`tree`),
+and drift is judged against that tree. From a worktree the folder is outside the working directory, so Claude Code may
+ask for permission before it writes the NAP. `git clean -fdx` deletes ignored files, `.handoff/` included. NAPs may still be
+copied or shared, so secrets are written as variable names only, and the check script looks for token- or key-shaped
+values and for secret values from `.env*` files at the repository root and `config*.json` files (up to two folders
+deep) copied into the document.
 
-## Keeping NAPs out of git
+## Where NAPs are kept
 
-NAPs are meant to be committed so that others can read them. To keep them out of the repository, add `handoff/` to
-`.gitignore` (for everyone) or to `.git/info/exclude` (only for you). Writing, checking and drift detection work the
-same.
+Set the `HANDOFF_DIR` environment variable to keep NAPs somewhere else. A relative path is under the current working
+tree.
+
+- `HANDOFF_DIR=handoff`: NAPs stay in the repository and are committed with the branch — for teammates, or for a cloud
+  session that only sees what was pushed. The folder's `.gitignore` then excludes only the drift hash record files.
+- An absolute path, such as a synced folder, to continue on another machine.
+- A temporary folder (`%TEMP%`, `$TMPDIR`) is not recommended: the OS may clean it up and drop your NAPs without a word.
+
+To apply it to every session, put it in the `env` of the Claude Code settings, e.g. `"env": { "HANDOFF_DIR": "handoff" }`
+in the project's `.claude/settings.json`. Outside the working directory, Claude Code may ask for permission before it
+writes the NAP.
+
+Coming from 0.1.x: earlier NAPs stay in `handoff/` (`rN.md`). To continue one, pass its path, e.g.
+`/handoff resume handoff/2026-11-05/r1.md`.
 
 ## Uninstall
 
 - Plugin: `claude plugin uninstall handoff@handoff`, then `claude plugin marketplace remove handoff`
 - Direct clone: delete `~/.claude/skills/handoff` (or the project's `.claude/skills/handoff`)
-- Each repository you used it in keeps the `handoff/` folder with your NAPs and the line `/handoff/**/.*.files` that
-  the skill added to `.git/info/exclude`. Delete them if you no longer need them.
+- Each repository you used it in keeps the `.handoff/` folder in its main working tree. Delete it if you no longer
+  need it. Version 0.1.x also left a `handoff/` folder and the line `/handoff/**/.*.files` in `.git/info/exclude`.
 
 ## Language
 

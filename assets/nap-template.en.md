@@ -8,6 +8,7 @@ branch: <from prepare output>
 head: <from prepare output>
 dirty: <from prepare output>
 worktree: <from prepare output>
+tree: <from prepare output>
 session: <from prepare output>
 previous: <from prepare output>
 ---

@@ -8,6 +8,7 @@ branch: fix/korean-csv-encoding
 head: be3e5f7
 dirty: true
 worktree: 781ecf30dac2
+tree: /home/dev/csvtool
 session: sess-B-002
 previous:
 ---
